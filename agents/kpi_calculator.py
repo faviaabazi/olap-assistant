@@ -61,7 +61,7 @@ _FIELD_MAP: dict[str, tuple[str, str]] = {
     "customer_segment": ("c.customer_segment", "JOIN dim_customer  c ON f.customer_key  = c.customer_key"),
 }
 
-_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "quarter", "month"})
+_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "month"})
 
 # dim_date is always joined for year access in yoy/mom — stored separately
 _DATE_JOIN = "JOIN dim_date d ON f.date_key = d.date_key"
