@@ -41,6 +41,7 @@ from agents.kpi_calculator              import KPICalculatorAgent
 from agents.report_generator            import ReportGeneratorAgent
 from agents.optional.anomaly_detection  import AnomalyDetectionAgent
 from agents.optional.visualization      import VisualizationAgent
+from agents.optional.executive_summary  import ExecutiveSummaryAgent
 
 
 # ── System prompt for query classification ─────────────────────────────────────
@@ -120,6 +121,18 @@ agent: "visualization"
     Always place visualization as the LAST step, after a data-producing step.
     Use ONLY when the user explicitly asks for a chart, graph, plot, or visualization.
 
+agent: "executive_summary"
+  run(query)
+    query : {
+      "context": str,  # describe the scope, e.g. "Q4 2024 global retail review"
+    }
+    IMPORTANT: prior agent results are injected automatically — ALL preceding steps
+    are passed in as input.  Always place executive_summary as the LAST step.
+    Use when the user asks for: executive summary, narrative, report overview,
+    summary of findings, or a high-level briefing.
+    For a standalone summary, precede it with 2-3 data steps (yoy_growth,
+    profit_margins, top_n) so there is enough material to synthesise.
+
 ━━━ ROUTING RULES ━━━
 - "drill down / go deeper / more detail"  → navigator.drill_down
 - "roll up / less detail / summarise"     → navigator.roll_up
@@ -132,6 +145,8 @@ agent: "visualization"
 - "margin / profitability / profit %"     → kpi.profit_margins
 - "anomaly / outlier / unusual / spike / dip / abnormal" → anomaly.run
 - "chart / plot / graph / visualize / show me visually" → prior data step + visualization.run
+- "executive summary / narrative / report overview / summarize / briefing" →
+      kpi.yoy_growth + kpi.profit_margins + kpi.top_n + executive_summary.run
 - Complex queries: use 2-3 steps combined into one report.
 
 ━━━ CHAINING EXAMPLES ━━━
@@ -144,6 +159,10 @@ agent: "visualization"
 
 "Full performance overview"
   → kpi.yoy_growth + kpi.profit_margins + cube.pivot
+
+"Give me an executive summary"
+  → kpi.yoy_growth(revenue, overall) + kpi.profit_margins(region)
+    + kpi.top_n(country, revenue, 5, {}) + executive_summary.run
 """.strip()
 
 
@@ -171,7 +190,7 @@ _PLAN_TOOL = {
                     "properties": {
                         "agent": {
                             "type": "string",
-                            "enum": ["navigator", "cube", "kpi", "anomaly", "visualization"],
+                            "enum": ["navigator", "cube", "kpi", "anomaly", "visualization", "executive_summary"],
                             "description": "Which agent to call.",
                         },
                         "method": {
@@ -230,6 +249,7 @@ class Planner:
         self.reporter  = ReportGeneratorAgent(self.client, self.con)
         self.anomaly        = AnomalyDetectionAgent(self.client, self.con)
         self.visualization  = VisualizationAgent(self.client, self.con)
+        self.exec_summary   = ExecutiveSummaryAgent(self.client, self.con)
 
         # Conversation history: list of {"role": "user"|"assistant", "content": str}
         self.conversation_history: list[dict] = []
@@ -276,6 +296,13 @@ class Planner:
                 query  = params.setdefault("query", {})
                 query["data"] = data
 
+            # Inject ALL preceding results into executive_summary so it can
+            # synthesise across every dataset collected so far in this turn.
+            if step.get("agent") == "executive_summary" and agent_results:
+                params = step.setdefault("params", {})
+                query  = params.setdefault("query", {})
+                query["results"] = agent_results
+
             result = self._dispatch(step)
             result["title"] = step.get("title", "")
             agent_results.append(result)
@@ -294,6 +321,11 @@ class Planner:
                 report["anomalies"]      = ar["anomalies"]
                 report["anomaly_count"]  = ar["anomaly_count"]
                 report["interpretation"] = ar.get("interpretation", "")
+            if ar.get("operation") == "executive_summary" and "exec_headline" not in report:
+                report["exec_headline"] = ar.get("headline", "")
+                report["exec_insights"] = ar.get("insights", [])
+                report["exec_action"]   = ar.get("recommended_action", "")
+                report["exec_risks"]    = ar.get("risks", [])
 
         # 5. Record the assistant turn (store just the text summary)
         self.conversation_history.append({
@@ -365,11 +397,12 @@ class Planner:
         params      = step.get("params") or {}
 
         agent_map: dict[str, Any] = {
-            "navigator":     self.navigator,
-            "cube":          self.cube,
-            "kpi":           self.kpi,
-            "anomaly":       self.anomaly,
-            "visualization": self.visualization,
+            "navigator":         self.navigator,
+            "cube":              self.cube,
+            "kpi":               self.kpi,
+            "anomaly":           self.anomaly,
+            "visualization":     self.visualization,
+            "executive_summary": self.exec_summary,
         }
 
         agent = agent_map.get(agent_name)
