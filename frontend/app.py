@@ -772,24 +772,6 @@ def render_assistant_bubble(result: dict, is_last: bool) -> None:
     # ── Executive summary card ─────────────────────────────────────────────
     render_executive_summary(result)
 
-    # ── Routing metadata ───────────────────────────────────────────────────
-    if reasoning:
-        safe_r = html.escape(reasoning)
-        st.markdown(
-            f'<div class="reasoning-line">{safe_r}</div>',
-            unsafe_allow_html=True,
-        )
-    if steps:
-        badges = "".join(
-            f'<span class="badge">'
-            f'⚡&nbsp;{html.escape(s.get("agent",""))}.{html.escape(s.get("method",""))}'
-            f'</span>'
-            for s in steps
-        )
-        st.markdown(
-            f'<div class="badge-row">{badges}</div>',
-            unsafe_allow_html=True,
-        )
 
 # ── Main chat area ────────────────────────────────────────────────────────────
 

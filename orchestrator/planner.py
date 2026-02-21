@@ -313,8 +313,15 @@ class Planner:
             result["title"] = step.get("title", "")
             agent_results.append(result)
 
-        # 4. Pass all results through ReportGenerator
-        report = self.reporter.full_report(agent_results)
+        # 4. Pass results through ReportGenerator — skip agents that produce no
+        #    table rows (visualization renders a chart; executive_summary renders
+        #    a structured card). Including them produces empty "(no data)" sections.
+        _NO_TABLE_OPS = {"visualization", "executive_summary"}
+        report_inputs = [
+            ar for ar in agent_results
+            if ar.get("operation") not in _NO_TABLE_OPS
+        ]
+        report = self.reporter.full_report(report_inputs)
 
         # 4b. Bubble up figure_json and anomaly data to the top-level response
         #     so the frontend can render charts and highlighted tables directly.
