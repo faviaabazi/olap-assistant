@@ -298,10 +298,16 @@ class Planner:
 
             # Inject ALL preceding results into executive_summary so it can
             # synthesise across every dataset collected so far in this turn.
+            # Normalise params to always be {"query": {"context": ..., "results": [...]}},
+            # regardless of whether Claude nested params under "query" or left them flat.
             if step.get("agent") == "executive_summary" and agent_results:
-                params = step.setdefault("params", {})
-                query  = params.setdefault("query", {})
-                query["results"] = agent_results
+                raw = step.get("params") or {}
+                # Accept both {"query": {"context": ...}} and {"context": ...}
+                inner   = raw.get("query") if isinstance(raw.get("query"), dict) else raw
+                context = inner.get("context", "")
+                step["params"] = {
+                    "query": {"context": context, "results": agent_results}
+                }
 
             result = self._dispatch(step)
             result["title"] = step.get("title", "")
