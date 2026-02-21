@@ -8,8 +8,10 @@ Run with:
 from __future__ import annotations
 
 import html
+import json
 import uuid
 
+import plotly.io as pio
 import requests
 import streamlit as st
 
@@ -23,6 +25,8 @@ EXAMPLE_QUERIES = [
     "Drill down Europe by country",
     "Profit margins by category",
     "Compare Q3 vs Q4 2024",
+    "Show me a chart of revenue by region",
+    "Detect profit anomalies by country",
 ]
 
 # ── Page configuration ────────────────────────────────────────────────────────
@@ -255,6 +259,63 @@ st.markdown("""
     color: #818cf8;
 }
 
+/* ── Chart container ── */
+.chart-wrap {
+    margin: 6px 0 4px 42px;
+    border: 1px solid #1e2235;
+    border-radius: 10px;
+    overflow: hidden;
+}
+.chart-reasoning {
+    font-size: 11.5px;
+    color: #384060;
+    font-style: italic;
+    margin: 4px 0 10px 42px;
+}
+
+/* ── Anomaly section ── */
+.anomaly-section { margin: 8px 0 4px 42px; }
+.anomaly-header {
+    font-size: 12px;
+    font-weight: 700;
+    color: #ef4444;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    margin-bottom: 7px;
+}
+.anomaly-interp {
+    font-size: 13px;
+    color: #b8c4da;
+    line-height: 1.65;
+    background: rgba(239, 68, 68, 0.06);
+    border: 1px solid rgba(239, 68, 68, 0.22);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+}
+.anomaly-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Courier New', monospace;
+    font-size: 11.5px;
+}
+.anomaly-table th {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+    white-space: nowrap;
+}
+.anomaly-table td {
+    background: rgba(239, 68, 68, 0.05);
+    color: #fca5a5;
+    padding: 5px 10px;
+    border-bottom: 1px solid rgba(239, 68, 68, 0.1);
+    white-space: nowrap;
+}
+.anomaly-table tr:last-child td { border-bottom: none; }
+
 /* ── Chat input ── */
 [data-testid="stChatInput"] > div {
     background: #191c2a !important;
@@ -370,6 +431,71 @@ def call_query_api(query: str, session_id: str) -> dict:
 
 # ── Render helpers ────────────────────────────────────────────────────────────
 
+def render_plotly_chart(result: dict) -> None:
+    """Render a Plotly figure from result["figure_json"] if present."""
+    figure_json = result.get("figure_json")
+    if not figure_json:
+        return
+    try:
+        fig = pio.from_json(json.dumps(figure_json))
+        st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown("</div>", unsafe_allow_html=True)
+    except Exception:
+        return  # silently skip broken figures
+
+    reasoning = result.get("chart_reasoning", "")
+    if reasoning:
+        st.markdown(
+            f'<div class="chart-reasoning">'
+            f'📈&nbsp;{html.escape(reasoning)}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_anomaly_table(result: dict) -> None:
+    """Render anomaly rows highlighted in red, plus the interpretation."""
+    anomalies = result.get("anomalies")
+    if not anomalies or result.get("anomaly_count", 0) == 0:
+        return
+
+    interpretation = result.get("interpretation", "")
+    interp_html = (
+        f'<div class="anomaly-interp">{html.escape(interpretation)}</div>'
+        if interpretation else ""
+    )
+
+    # Build HTML table from anomaly rows
+    cols = list(anomalies[0].keys())
+    header_cells = "".join(
+        f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in cols
+    )
+    rows_html = ""
+    for row in anomalies:
+        cells = "".join(
+            f"<td>{html.escape(str(row.get(c, '')))}</td>" for c in cols
+        )
+        rows_html += f"<tr>{cells}</tr>"
+
+    table_html = (
+        f'<table class="anomaly-table">'
+        f"<thead><tr>{header_cells}</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table>"
+    )
+
+    count = result["anomaly_count"]
+    st.markdown(
+        f'<div class="anomaly-section">'
+        f'<div class="anomaly-header">⚠ {count} anomal{"y" if count == 1 else "ies"} detected</div>'
+        f"{interp_html}"
+        f"{table_html}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_user_bubble(text: str) -> None:
     safe = html.escape(text)
     st.markdown(
@@ -430,6 +556,12 @@ def render_assistant_bubble(result: dict, is_last: bool) -> None:
                 f'<div class="report-pre">{safe_report}</div>',
                 unsafe_allow_html=True,
             )
+
+    # ── Plotly chart (visualization agent) ────────────────────────────────
+    render_plotly_chart(result)
+
+    # ── Anomaly table (anomaly detection agent) ────────────────────────────
+    render_anomaly_table(result)
 
     # ── Routing metadata ───────────────────────────────────────────────────
     if reasoning:

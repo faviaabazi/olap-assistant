@@ -40,6 +40,7 @@ from agents.cube_operations             import CubeOperationsAgent
 from agents.kpi_calculator              import KPICalculatorAgent
 from agents.report_generator            import ReportGeneratorAgent
 from agents.optional.anomaly_detection  import AnomalyDetectionAgent
+from agents.optional.visualization      import VisualizationAgent
 
 
 # ── System prompt for query classification ─────────────────────────────────────
@@ -109,6 +110,16 @@ agent: "anomaly"
     }
     Returns anomaly rows, normal rows, z-scores, and a Claude business interpretation.
 
+agent: "visualization"
+  run(query)
+    query : {
+      "context": str,  # what the data represents, e.g. "Revenue by region 2022-2024"
+      "title":   str,  # chart title (optional, falls back to context)
+    }
+    IMPORTANT: data is injected automatically from the IMMEDIATELY PRECEDING step.
+    Always place visualization as the LAST step, after a data-producing step.
+    Use ONLY when the user explicitly asks for a chart, graph, plot, or visualization.
+
 ━━━ ROUTING RULES ━━━
 - "drill down / go deeper / more detail"  → navigator.drill_down
 - "roll up / less detail / summarise"     → navigator.roll_up
@@ -120,6 +131,7 @@ agent: "anomaly"
 - "top N / best / highest / ranking"      → kpi.top_n
 - "margin / profitability / profit %"     → kpi.profit_margins
 - "anomaly / outlier / unusual / spike / dip / abnormal" → anomaly.run
+- "chart / plot / graph / visualize / show me visually" → prior data step + visualization.run
 - Complex queries: use 2-3 steps combined into one report.
 
 ━━━ CHAINING EXAMPLES ━━━
@@ -159,7 +171,7 @@ _PLAN_TOOL = {
                     "properties": {
                         "agent": {
                             "type": "string",
-                            "enum": ["navigator", "cube", "kpi", "anomaly"],
+                            "enum": ["navigator", "cube", "kpi", "anomaly", "visualization"],
                             "description": "Which agent to call.",
                         },
                         "method": {
@@ -216,7 +228,8 @@ class Planner:
         self.cube      = CubeOperationsAgent(self.client, self.con)
         self.kpi       = KPICalculatorAgent(self.client, self.con)
         self.reporter  = ReportGeneratorAgent(self.client, self.con)
-        self.anomaly   = AnomalyDetectionAgent(self.client, self.con)
+        self.anomaly        = AnomalyDetectionAgent(self.client, self.con)
+        self.visualization  = VisualizationAgent(self.client, self.con)
 
         # Conversation history: list of {"role": "user"|"assistant", "content": str}
         self.conversation_history: list[dict] = []
@@ -254,12 +267,33 @@ class Planner:
         # 3. Execute each step, attach title for report section headings
         agent_results: list[dict] = []
         for step in steps:
+            # Inject OLAP data from the immediately preceding result into
+            # visualization steps so the agent doesn't have to query the DB itself.
+            if step.get("agent") == "visualization" and agent_results:
+                prev  = agent_results[-1]
+                data  = prev.get("rows") or prev.get("all_rows") or []
+                params = step.setdefault("params", {})
+                query  = params.setdefault("query", {})
+                query["data"] = data
+
             result = self._dispatch(step)
             result["title"] = step.get("title", "")
             agent_results.append(result)
 
         # 4. Pass all results through ReportGenerator
         report = self.reporter.full_report(agent_results)
+
+        # 4b. Bubble up figure_json and anomaly data to the top-level response
+        #     so the frontend can render charts and highlighted tables directly.
+        for ar in agent_results:
+            if "figure_json" in ar and "figure_json" not in report:
+                report["figure_json"]    = ar["figure_json"]
+                report["chart_type"]     = ar.get("chart_type", "")
+                report["chart_reasoning"] = ar.get("reasoning", "")
+            if ar.get("anomaly_count", 0) > 0 and "anomalies" not in report:
+                report["anomalies"]      = ar["anomalies"]
+                report["anomaly_count"]  = ar["anomaly_count"]
+                report["interpretation"] = ar.get("interpretation", "")
 
         # 5. Record the assistant turn (store just the text summary)
         self.conversation_history.append({
@@ -331,10 +365,11 @@ class Planner:
         params      = step.get("params") or {}
 
         agent_map: dict[str, Any] = {
-            "navigator": self.navigator,
-            "cube":      self.cube,
-            "kpi":       self.kpi,
-            "anomaly":   self.anomaly,
+            "navigator":     self.navigator,
+            "cube":          self.cube,
+            "kpi":           self.kpi,
+            "anomaly":       self.anomaly,
+            "visualization": self.visualization,
         }
 
         agent = agent_map.get(agent_name)
