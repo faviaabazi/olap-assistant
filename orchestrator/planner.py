@@ -35,10 +35,11 @@ _ROOT = pathlib.Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from agents.dimension_navigator import DimensionNavigatorAgent
-from agents.cube_operations     import CubeOperationsAgent
-from agents.kpi_calculator      import KPICalculatorAgent
-from agents.report_generator    import ReportGeneratorAgent
+from agents.dimension_navigator          import DimensionNavigatorAgent
+from agents.cube_operations             import CubeOperationsAgent
+from agents.kpi_calculator              import KPICalculatorAgent
+from agents.report_generator            import ReportGeneratorAgent
+from agents.optional.anomaly_detection  import AnomalyDetectionAgent
 
 
 # ── System prompt for query classification ─────────────────────────────────────
@@ -98,6 +99,16 @@ agent: "kpi"
   profit_margins(dimension)
     dimension : any field name
 
+agent: "anomaly"
+  run(query)
+    query : {
+      "metric"     : revenue | profit | cost | quantity,
+      "dimension"  : year | quarter | month | region | country |
+                     category | subcategory | customer_segment,
+      "sensitivity": float (optional, default 2.0 — z-score threshold)
+    }
+    Returns anomaly rows, normal rows, z-scores, and a Claude business interpretation.
+
 ━━━ ROUTING RULES ━━━
 - "drill down / go deeper / more detail"  → navigator.drill_down
 - "roll up / less detail / summarise"     → navigator.roll_up
@@ -108,6 +119,7 @@ agent: "kpi"
 - "month over month / MoM / monthly"      → kpi.mom_change
 - "top N / best / highest / ranking"      → kpi.top_n
 - "margin / profitability / profit %"     → kpi.profit_margins
+- "anomaly / outlier / unusual / spike / dip / abnormal" → anomaly.run
 - Complex queries: use 2-3 steps combined into one report.
 
 ━━━ CHAINING EXAMPLES ━━━
@@ -147,7 +159,7 @@ _PLAN_TOOL = {
                     "properties": {
                         "agent": {
                             "type": "string",
-                            "enum": ["navigator", "cube", "kpi"],
+                            "enum": ["navigator", "cube", "kpi", "anomaly"],
                             "description": "Which agent to call.",
                         },
                         "method": {
@@ -204,6 +216,7 @@ class Planner:
         self.cube      = CubeOperationsAgent(self.client, self.con)
         self.kpi       = KPICalculatorAgent(self.client, self.con)
         self.reporter  = ReportGeneratorAgent(self.client, self.con)
+        self.anomaly   = AnomalyDetectionAgent(self.client, self.con)
 
         # Conversation history: list of {"role": "user"|"assistant", "content": str}
         self.conversation_history: list[dict] = []
@@ -321,6 +334,7 @@ class Planner:
             "navigator": self.navigator,
             "cube":      self.cube,
             "kpi":       self.kpi,
+            "anomaly":   self.anomaly,
         }
 
         agent = agent_map.get(agent_name)
