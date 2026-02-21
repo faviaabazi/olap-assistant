@@ -27,6 +27,7 @@ EXAMPLE_QUERIES = [
     "Compare Q3 vs Q4 2024",
     "Show me a chart of revenue by region",
     "Detect profit anomalies by country",
+    "Give me an executive summary",
 ]
 
 # ── Page configuration ────────────────────────────────────────────────────────
@@ -316,6 +317,120 @@ st.markdown("""
 }
 .anomaly-table tr:last-child td { border-bottom: none; }
 
+/* ── Executive summary card ── */
+.exec-card {
+    margin: 8px 0 4px 42px;
+    background: linear-gradient(160deg, #0f1221 0%, #131729 100%);
+    border: 1px solid #2a2d50;
+    border-radius: 14px;
+    overflow: hidden;
+}
+.exec-card-header {
+    padding: 12px 20px 10px;
+    border-bottom: 1px solid #1e2235;
+}
+.exec-card-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #4c51a0;
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+}
+.exec-headline {
+    padding: 16px 20px 14px;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.55;
+    background: linear-gradient(135deg, #a5b4fc, #c4b5fd);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    border-bottom: 1px solid #181c2e;
+}
+.exec-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #384060;
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    padding: 12px 20px 6px;
+}
+.exec-insights {
+    list-style: none;
+    margin: 0;
+    padding: 0 20px 14px;
+}
+.exec-insights li {
+    font-size: 13px;
+    color: #8fa0bc;
+    line-height: 1.65;
+    padding: 5px 0 5px 20px;
+    position: relative;
+    border-bottom: 1px solid #131627;
+}
+.exec-insights li:last-child { border-bottom: none; }
+.exec-insights li::before {
+    content: "▸";
+    position: absolute;
+    left: 0;
+    color: #6366f1;
+    font-size: 11px;
+    top: 7px;
+}
+.exec-action-wrap { padding: 0 20px 18px; }
+.exec-action {
+    background: rgba(99, 102, 241, 0.07);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+.exec-action-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #6366f1;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 5px;
+}
+.exec-action-text {
+    font-size: 13px;
+    color: #a5b4fc;
+    line-height: 1.6;
+}
+
+/* ── At-risk table (executive summary) ── */
+.risk-section { margin: 6px 0 10px 42px; }
+.risk-header {
+    font-size: 12px;
+    font-weight: 700;
+    color: #f59e0b;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    margin-bottom: 7px;
+}
+.risk-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Courier New', monospace;
+    font-size: 11.5px;
+}
+.risk-table th {
+    background: rgba(245, 158, 11, 0.09);
+    color: #f59e0b;
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+    white-space: nowrap;
+}
+.risk-table td {
+    background: rgba(245, 158, 11, 0.04);
+    color: #fcd34d;
+    padding: 5px 10px;
+    border-bottom: 1px solid rgba(245, 158, 11, 0.08);
+    white-space: nowrap;
+}
+.risk-table tr:last-child td { border-bottom: none; }
+.risk-table td.risk-reason { color: #b45309; font-style: italic; }
+
 /* ── Chat input ── */
 [data-testid="stChatInput"] > div {
     background: #191c2a !important;
@@ -496,6 +611,86 @@ def render_anomaly_table(result: dict) -> None:
     )
 
 
+def render_executive_summary(result: dict) -> None:
+    """Render headline, bullet insights, recommended action, and at-risk table."""
+    headline = result.get("exec_headline", "")
+    insights = result.get("exec_insights", [])
+    action   = result.get("exec_action", "")
+    risks    = result.get("exec_risks", [])
+
+    if not headline and not insights:
+        return
+
+    # ── headline ───────────────────────────────────────────────────────────
+    headline_html = (
+        f'<div class="exec-headline">{html.escape(headline)}</div>'
+        if headline else ""
+    )
+
+    # ── bullet insights ────────────────────────────────────────────────────
+    bullets_html = ""
+    if insights:
+        items = "".join(f"<li>{html.escape(b)}</li>" for b in insights)
+        bullets_html = (
+            '<div class="exec-section-label">Key Insights</div>'
+            f'<ul class="exec-insights">{items}</ul>'
+        )
+
+    # ── recommended action ─────────────────────────────────────────────────
+    action_html = ""
+    if action:
+        action_html = (
+            '<div class="exec-action-wrap">'
+            '<div class="exec-action">'
+            '<div class="exec-action-label">Recommended Action</div>'
+            f'<div class="exec-action-text">{html.escape(action)}</div>'
+            '</div>'
+            '</div>'
+        )
+
+    st.markdown(
+        '<div class="exec-card">'
+        '<div class="exec-card-header">'
+        '<span class="exec-card-label">Executive Summary</span>'
+        '</div>'
+        f'{headline_html}'
+        f'{bullets_html}'
+        f'{action_html}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── at-risk table ──────────────────────────────────────────────────────
+    if risks:
+        # Put risk_reason last for readability
+        all_cols  = list(risks[0].keys())
+        data_cols = [c for c in all_cols if c != "risk_reason"]
+        cols      = data_cols + (["risk_reason"] if "risk_reason" in all_cols else [])
+
+        header_cells = "".join(
+            f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
+        )
+        rows_html = ""
+        for row in risks:
+            cells = ""
+            for c in cols:
+                cls = ' class="risk-reason"' if c == "risk_reason" else ""
+                cells += f'<td{cls}>{html.escape(str(row.get(c, "")))}</td>'
+            rows_html += f"<tr>{cells}</tr>"
+
+        count = len(risks)
+        st.markdown(
+            f'<div class="risk-section">'
+            f'<div class="risk-header">⚡ {count} at-risk area{"s" if count != 1 else ""}</div>'
+            f'<table class="risk-table">'
+            f'<thead><tr>{header_cells}</tr></thead>'
+            f'<tbody>{rows_html}</tbody>'
+            f'</table>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def render_user_bubble(text: str) -> None:
     safe = html.escape(text)
     st.markdown(
@@ -528,15 +723,26 @@ def render_assistant_bubble(result: dict, is_last: bool) -> None:
     reasoning     = routing.get("reasoning", "")
 
     # Build a one-line summary for the bubble
-    step_chain = " → ".join(
+    step_chain    = " → ".join(
         f"{s.get('agent','?')}.{s.get('method','?')}" for s in steps
     )
+    exec_headline = result.get("exec_headline", "")
     sections_label = f"{section_count} section{'s' if section_count != 1 else ''}"
     chain_html = (
         f"&nbsp;·&nbsp;<code style='font-size:12px; color:#818cf8;'>{html.escape(step_chain)}</code>"
         if step_chain else ""
     )
-    bubble_body = f"<strong>{sections_label}</strong>{chain_html}"
+    # When an executive summary is present, show its headline in the bubble
+    if exec_headline:
+        bubble_body = (
+            f"<strong style='background:linear-gradient(135deg,#a5b4fc,#c4b5fd);"
+            f"-webkit-background-clip:text;-webkit-text-fill-color:transparent;'>"
+            f"{html.escape(exec_headline[:140])}"
+            f"{'…' if len(exec_headline) > 140 else ''}"
+            f"</strong>{chain_html}"
+        )
+    else:
+        bubble_body = f"<strong>{sections_label}</strong>{chain_html}"
 
     st.markdown(
         f"""
@@ -562,6 +768,9 @@ def render_assistant_bubble(result: dict, is_last: bool) -> None:
 
     # ── Anomaly table (anomaly detection agent) ────────────────────────────
     render_anomaly_table(result)
+
+    # ── Executive summary card ─────────────────────────────────────────────
+    render_executive_summary(result)
 
     # ── Routing metadata ───────────────────────────────────────────────────
     if reasoning:
