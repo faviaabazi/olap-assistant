@@ -20,6 +20,7 @@ Usage
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import pathlib
@@ -42,6 +43,41 @@ from agents.report_generator            import ReportGeneratorAgent
 from agents.optional.anomaly_detection  import AnomalyDetectionAgent
 from agents.optional.visualization      import VisualizationAgent
 from agents.optional.executive_summary  import ExecutiveSummaryAgent
+
+
+# ── Response-mode detection ────────────────────────────────────────────────────
+
+_COMPARISON_KEYWORDS = frozenset({
+    "vs", "versus", "compare", "comparison", "difference", "diff",
+    "change", "growth", "yoy", "mom", "year-over-year", "month-over-month",
+    "year over year", "month over month",
+})
+
+
+def _detect_response_mode(query: str, steps: list[dict]) -> str:
+    """
+    Determine how the frontend should render the response.
+
+    Priority order: chart > executive > comparison > simple > report
+    - chart      : plan contains a visualization step
+    - executive  : plan contains an executive_summary step
+    - comparison : query uses comparison / growth / YoY / MoM keywords
+    - simple     : single-step query returning one ranked or margin table
+    - report     : everything else
+    """
+    agent_names = {s.get("agent", "") for s in steps}
+    if "visualization" in agent_names:
+        return "chart"
+    if "executive_summary" in agent_names:
+        return "executive"
+    q = query.lower()
+    if any(kw in q for kw in _COMPARISON_KEYWORDS):
+        return "comparison"
+    if len(steps) == 1 and steps[0].get("method") in {
+        "top_n", "profit_margins", "slice", "dice"
+    }:
+        return "simple"
+    return "report"
 
 
 # ── System prompt for query classification ─────────────────────────────────────
@@ -274,6 +310,7 @@ class Planner:
         # 2. Classify intent → execution plan
         try:
             steps, reasoning = self._classify(user_query)
+            response_mode    = _detect_response_mode(user_query, steps)
         except Exception as exc:
             error = {
                 "status":  "error",
@@ -339,6 +376,26 @@ class Planner:
                 report["exec_insights"] = ar.get("insights", [])
                 report["exec_action"]   = ar.get("recommended_action", "")
                 report["exec_risks"]    = ar.get("risks", [])
+
+        # 4c. Attach response mode and bubble up result rows for simple/comparison
+        report["response_mode"] = response_mode
+
+        if response_mode in ("simple", "comparison"):
+            for ar in agent_results:
+                rows = ar.get("rows") or ar.get("all_rows") or []
+                if rows and "result_rows" not in report:
+                    report["result_rows"] = rows
+                    break
+
+        # 4d. Generate a short takeaway text for comparison and simple results
+        if response_mode == "comparison" and report.get("result_rows"):
+            report["comparison_takeaway"] = self._short_summary(
+                user_query, report["result_rows"], "comparison"
+            )
+        elif response_mode == "simple" and report.get("result_rows"):
+            report["simple_summary"] = self._short_summary(
+                user_query, report["result_rows"], "simple"
+            )
 
         # 5. Record the assistant turn (store just the text summary)
         self.conversation_history.append({
@@ -440,6 +497,37 @@ class Planner:
                 "operation": method_name,
                 "message":   f"{type(exc).__name__}: {exc}",
             }
+
+    def _short_summary(self, query: str, rows: list[dict], mode: str) -> str:
+        """
+        Use claude-haiku to generate a brief insight for simple or comparison results.
+        Returns an empty string on any failure so the frontend degrades gracefully.
+        """
+        if not rows:
+            return ""
+        preview = json.dumps(rows[:12], default=str)
+        if mode == "comparison":
+            instruction = (
+                "Write 1-2 sentences summarising the key insight from this data. "
+                "Mention the biggest change or trend with specific numbers. Be concise."
+            )
+        else:
+            instruction = (
+                "Write exactly 1 sentence summarising the top result from this data. "
+                "Include the top item name and a specific number. Be concise."
+            )
+        try:
+            resp = self.client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=120,
+                messages=[{
+                    "role": "user",
+                    "content": f"Query: {query}\nData: {preview}\n\n{instruction}",
+                }],
+            )
+            return resp.content[0].text.strip() if resp.content else ""
+        except Exception:
+            return ""
 
     def reset(self) -> None:
         """Clear conversation history to start a fresh session."""

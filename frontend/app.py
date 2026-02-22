@@ -429,6 +429,50 @@ div[data-testid="stChatInput"],
 
 /* ── KB hint ── */
 .kb-hint { font-size: 11px; color: #737373; text-align: center; padding: 4px 0 8px; }
+
+/* ── Comparison table ── */
+.comparison-table {
+    width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0;
+}
+.comparison-table th {
+    background: #2a2a2a; color: #f59e0b; padding: 8px 12px; text-align: left;
+    border-bottom: 2px solid rgba(245,158,11,0.3);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    white-space: nowrap;
+}
+.comparison-table td {
+    padding: 8px 12px; border-bottom: 1px solid #2a2a2a; color: #fafafa;
+    white-space: nowrap;
+}
+.comparison-table tr:last-child td { border-bottom: none; }
+.comparison-table tr:hover td { background: #2a2a2a; }
+.comparison-table td.null-cell { color: #555555; }
+.comparison-takeaway {
+    font-size: 13px; color: #a0a0a0; font-style: italic;
+    margin-top: 14px; padding: 8px 14px;
+    border-left: 3px solid #f59e0b40; line-height: 1.65;
+}
+
+/* ── Simple table ── */
+.simple-table {
+    width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0;
+}
+.simple-table th {
+    background: #2a2a2a; color: #737373; padding: 8px 12px; text-align: left;
+    border-bottom: 1px solid #333333;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    white-space: nowrap;
+}
+.simple-table td {
+    padding: 8px 12px; border-bottom: 1px solid #2a2a2a; color: #fafafa;
+    white-space: nowrap;
+}
+.simple-table tr.top-row td { color: #f59e0b; font-weight: 600; }
+.simple-table tr:last-child td { border-bottom: none; }
+.simple-table tr:hover td { background: #2a2a2a; }
+.simple-summary {
+    font-size: 13px; color: #a0a0a0; margin-top: 10px; line-height: 1.6;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -540,6 +584,103 @@ def call_query_api(query: str, session_id: str) -> dict:
 
 
 # ── Render helpers ────────────────────────────────────────────────────────────
+
+def _fmt_cell(val) -> str:
+    """Format a table cell value: numbers get thousands separators, None → em-dash."""
+    if val is None:
+        return None  # caller handles null-cell class
+    try:
+        f = float(val)
+        if f == int(f):
+            return f"{int(f):,}"
+        return f"{f:,.2f}"
+    except (TypeError, ValueError):
+        return html.escape(str(val))
+
+
+def render_comparison(result: dict) -> None:
+    """Render a comparison table: highlights % columns in green/red, shows takeaway."""
+    rows = result.get("result_rows", [])
+    if not rows:
+        return
+
+    cols = list(rows[0].keys())
+    hdr  = "".join(
+        f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
+    )
+    body = ""
+    for row in rows:
+        cells = ""
+        for c in cols:
+            val = row.get(c)
+            if c.endswith("_pct") and val is not None:
+                try:
+                    pct   = float(val)
+                    color = "#10b981" if pct >= 0 else "#ef4444"
+                    sign  = "+" if pct > 0 else ""
+                    cells += (
+                        f'<td style="color:{color}; font-weight:600;">'
+                        f'{sign}{pct:.2f}%</td>'
+                    )
+                except (TypeError, ValueError):
+                    cells += '<td class="null-cell">—</td>'
+            elif val is None:
+                cells += '<td class="null-cell">—</td>'
+            else:
+                display = _fmt_cell(val)
+                cells += f"<td>{display}</td>"
+        body += f"<tr>{cells}</tr>"
+
+    st.markdown(
+        f'<table class="comparison-table"><thead><tr>{hdr}</tr></thead>'
+        f'<tbody>{body}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+    takeaway = result.get("comparison_takeaway", "")
+    if takeaway:
+        st.markdown(
+            f'<div class="comparison-takeaway">{html.escape(takeaway)}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_simple(result: dict) -> None:
+    """Render a simple ranked/margin table with the top row highlighted in amber."""
+    rows = result.get("result_rows", [])
+    if not rows:
+        return
+
+    cols = list(rows[0].keys())
+    hdr  = "".join(
+        f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
+    )
+    body = ""
+    for i, row in enumerate(rows):
+        row_class = ' class="top-row"' if i == 0 else ""
+        cells = ""
+        for c in cols:
+            val = row.get(c)
+            if val is None:
+                cells += '<td class="null-cell">—</td>'
+            else:
+                display = _fmt_cell(val)
+                cells += f"<td>{display}</td>"
+        body += f"<tr{row_class}>{cells}</tr>"
+
+    st.markdown(
+        f'<table class="simple-table"><thead><tr>{hdr}</tr></thead>'
+        f'<tbody>{body}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+    summary = result.get("simple_summary", "")
+    if summary:
+        st.markdown(
+            f'<div class="simple-summary">{html.escape(summary)}</div>',
+            unsafe_allow_html=True,
+        )
+
 
 def render_user_bubble(text: str, ts: str = "") -> None:
     safe = html.escape(text)
@@ -691,6 +832,7 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
         return
 
     # Bubble header content
+    response_mode = result.get("response_mode", "report")
     exec_headline = result.get("exec_headline", "")
     section_count = result.get("section_count", 0)
     report_text   = result.get("report", "")
@@ -701,6 +843,14 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
             f'<span style="font-weight:600; color:#f59e0b; font-size:15px;">'
             f'{excerpt}</span>'
         )
+    elif response_mode == "comparison":
+        n = len(result.get("result_rows", []))
+        bubble_body = f'<strong style="color:#fafafa;">📊 {n}-row comparison</strong>'
+    elif response_mode == "simple":
+        n = len(result.get("result_rows", []))
+        bubble_body = f'<strong style="color:#fafafa;">✓ {n} result{"s" if n != 1 else ""}</strong>'
+    elif response_mode == "chart":
+        bubble_body = '<strong style="color:#fafafa;">📊 Chart ready</strong>'
     else:
         s = "sections" if section_count != 1 else "section"
         bubble_body = f'<strong style="color:#fafafa;">{section_count} {s}</strong>'
@@ -711,20 +861,27 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
         unsafe_allow_html=True,
     )
 
-    # Full report expander
-    if report_text:
-        with st.expander("📄  View Full Report", expanded=is_last):
-            safe_r = html.escape(report_text).replace("$", "&#36;")
-            st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
+    # Content — dispatch on response mode
+    if response_mode == "chart":
+        render_plotly_chart(result)
 
-    # Chart (+ optional raw data expander)
-    render_plotly_chart(result)
+    elif response_mode == "executive":
+        render_executive_summary(result)
 
-    # Anomaly table
-    render_anomaly_table(result)
+    elif response_mode == "comparison":
+        render_comparison(result)
 
-    # Executive summary card
-    render_executive_summary(result)
+    elif response_mode == "simple":
+        render_simple(result)
+
+    else:  # "report" — full expander + optional chart / anomaly / exec summary
+        if report_text:
+            with st.expander("📄  View Full Report", expanded=is_last):
+                safe_r = html.escape(report_text).replace("$", "&#36;")
+                st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
+        render_plotly_chart(result)
+        render_anomaly_table(result)
+        render_executive_summary(result)
 
     # Response action buttons
     orig_query = result.get("_query", "")
