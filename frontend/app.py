@@ -10,27 +10,28 @@ from __future__ import annotations
 import html
 import json
 import uuid
+from datetime import datetime
 
+import pandas as pd
 import plotly.io as pio
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 API_BASE = "http://localhost:8000"
 
-EXAMPLE_QUERIES = [
-    "Top 5 countries by revenue",
-    "YoY growth by region",
-    "Drill down Europe by country",
-    "Profit margins by category",
-    "Compare Q3 vs Q4 2024",
-    "Show me a chart of revenue by region",
-    "Detect profit anomalies by country",
-    "Give me an executive summary",
+PROMPT_TEMPLATES = [
+    ("📊", "Chart",      "Show me a chart of revenue by ______"),
+    ("📈", "Growth",     "Show year-over-year growth of ______ by region"),
+    ("🔍", "Drill Down", "Drill down into ______ by country"),
+    ("🏆", "Top 5",      "Top 5 ______ by revenue"),
+    ("⚠️", "Anomalies",  "Detect profit anomalies by ______"),
+    ("📋", "Summary",    "Give me an executive summary of ______"),
 ]
 
-# ── Page configuration ────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="OLAP Assistant",
@@ -39,442 +40,430 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── Session state ─────────────────────────────────────────────────────────────
+
+_DEFAULTS: dict = {
+    "messages":      [],
+    "session_id":    str(uuid.uuid4()),
+    "show_welcome":  True,
+    "query_history": [],
+    "input_value":   "",
+    "last_query":    "",
+}
+for _k, _v in _DEFAULTS.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+# ── Global CSS ────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
-/* ── Chrome removal ── */
+/* ── Streamlit chrome ── */
 #MainMenu, footer, header { visibility: hidden; }
 
-/* ── App background ── */
-.stApp { background-color: #0d0f16; }
+/* ── Base ── */
+html, body { background: #111111 !important; }
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+.main,
+.block-container {
+    background-color: #111111 !important;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ── Kill ALL white backgrounds ── */
+[data-testid="stBottom"],
+section[data-testid="stBottom"],
+div[data-testid="stBottom"] > div,
+[data-testid="stChatInput"],
+div[data-testid="stChatInput"],
+.stChatInputContainer,
+[data-testid="stChatInputContainer"],
+[class*="chatInputContainer"],
+[class*="stBottom"] {
+    background-color: #111111 !important;
+}
 
 /* ── Sidebar ── */
-[data-testid="stSidebar"] {
-    background-color: #12141e;
-    border-right: 1px solid #1c1f30;
-}
-[data-testid="stSidebar"] .stButton > button {
-    width: 100%;
-    background: #191c2a;
-    color: #8892b0;
-    border: 1px solid #222540;
-    border-radius: 8px;
-    padding: 8px 12px;
-    text-align: left;
-    font-size: 13px;
-    transition: all 0.18s ease;
-}
-[data-testid="stSidebar"] .stButton > button:hover {
-    background: #1e2235;
-    border-color: #6366f1;
-    color: #e2e8f0;
-    transform: translateX(3px);
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] > div:first-child {
+    background-color: #1a1a1a !important;
+    border-right: 1px solid #333333 !important;
 }
 
-/* New conversation button */
-.new-convo-btn > div > button {
-    background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%) !important;
-    color: #fff !important;
-    border: none !important;
-    font-weight: 600 !important;
+/* ── Chat input ── */
+[data-testid="stChatInput"] > div {
+    background: #222222 !important;
+    border: 1px solid #333333 !important;
+    border-radius: 12px !important;
+}
+[data-testid="stChatInput"] textarea {
+    background: #222222 !important;
+    color: #fafafa !important;
     font-size: 14px !important;
-    border-radius: 10px !important;
-    padding: 10px 16px !important;
-    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
-    transition: all 0.2s ease !important;
+    border-radius: 12px !important;
 }
-.new-convo-btn > div > button:hover {
-    box-shadow: 0 6px 22px rgba(99, 102, 241, 0.5) !important;
-    transform: translateY(-2px) !important;
+[data-testid="stChatInput"] textarea:focus {
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
+    outline: none !important;
+    border-color: rgba(245, 158, 11, 0.5) !important;
 }
-
-/* ── User bubble (right-aligned) ── */
-.user-row {
-    display: flex;
-    justify-content: flex-end;
-    margin: 16px 0 4px 18%;
-}
-.user-bubble {
-    background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
-    color: #fff;
-    padding: 12px 18px;
-    border-radius: 20px 20px 5px 20px;
-    font-size: 14.5px;
-    line-height: 1.6;
-    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
-    word-break: break-word;
+[data-testid="stChatInput"] textarea::placeholder {
+    color: #737373 !important;
 }
 
-/* ── Assistant bubble (left-aligned) ── */
-.asst-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    margin: 4px 18% 2px 0;
-}
-.asst-avatar {
-    font-size: 22px;
-    flex-shrink: 0;
-    padding-top: 3px;
-}
-.asst-bubble {
-    background: #191c2a;
-    color: #b8c4da;
-    padding: 12px 18px;
-    border-radius: 5px 20px 20px 20px;
-    font-size: 14.5px;
-    line-height: 1.6;
-    border: 1px solid #222540;
-    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
-    word-break: break-word;
-}
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333333; border-radius: 4px; }
 
-/* ── Error bubble ── */
-.error-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    margin: 4px 18% 2px 0;
-}
-.error-bubble {
-    background: rgba(239, 68, 68, 0.07);
-    border: 1px solid rgba(239, 68, 68, 0.28);
-    color: #fca5a5;
-    padding: 12px 18px;
-    border-radius: 5px 20px 20px 20px;
-    font-size: 14px;
-    line-height: 1.6;
-    word-break: break-word;
-}
-
-/* ── Expander (report container) ── */
+/* ── Expanders ── */
 [data-testid="stExpander"] {
-    background: #101320 !important;
-    border: 1px solid #1e2235 !important;
+    background: #1a1a1a !important;
+    border: 1px solid #333333 !important;
     border-radius: 10px !important;
-    margin: 6px 0 4px 42px;
+    margin: 8px 0;
 }
 [data-testid="stExpander"] summary {
-    color: #6366f1 !important;
+    color: #f59e0b !important;
     font-size: 13px !important;
     font-weight: 600 !important;
 }
-[data-testid="stExpander"] summary:hover {
-    color: #818cf8 !important;
-}
+[data-testid="stExpander"] summary:hover { color: #fbbf24 !important; }
+[data-testid="stExpander"] details { background: #1a1a1a !important; }
 
-/* ── Monospace report block ── */
-.report-pre {
-    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
-    font-size: 12px;
-    line-height: 1.65;
-    color: #a8b8d0;
-    white-space: pre;
-    overflow-x: auto;
-    background: #090b12;
-    padding: 20px 22px;
-    border-radius: 7px;
-    border: 1px solid #171a28;
-    margin: 2px 0 6px 0;
+/* ── Welcome animation ── */
+@keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
-
-/* ── Routing metadata ── */
-.reasoning-line {
-    font-size: 11.5px;
-    color: #384060;
-    font-style: italic;
-    margin: 4px 0 5px 42px;
-    line-height: 1.45;
-}
-.badge-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    margin: 0 0 14px 42px;
-}
-.badge {
-    display: inline-flex;
-    align-items: center;
-    background: #13151f;
-    border: 1px solid #222540;
-    border-radius: 20px;
-    padding: 2px 10px;
-    font-size: 11px;
-    color: #6366f1;
-    font-family: 'Courier New', monospace;
-    letter-spacing: 0.02em;
-}
-
-/* ── Welcome screen ── */
 .welcome-wrap {
+    animation: fadeSlideIn 0.8s ease forwards;
     display: flex;
     justify-content: center;
-    padding-top: 72px;
+    padding-top: 60px;
 }
-.welcome-card {
-    background: #191c2a;
-    border: 1px solid #222540;
-    border-radius: 20px;
-    padding: 44px 52px;
-    text-align: center;
-    max-width: 580px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-}
-.welcome-icon { font-size: 52px; margin-bottom: 14px; }
-.welcome-title {
-    font-size: 26px;
-    font-weight: 700;
-    background: linear-gradient(135deg, #818cf8, #c4b5fd);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 14px;
-}
-.welcome-body {
-    font-size: 14.5px;
-    color: #5a6480;
-    line-height: 1.75;
-}
-.welcome-hint {
-    margin-top: 22px;
-    font-size: 13px;
-    color: #2d3454;
-    border-top: 1px solid #1e2235;
-    padding-top: 18px;
-}
-
-/* ── Stats pills ── */
-.stat-row {
+.welcome-card { text-align: center; max-width: 560px; }
+.welcome-icon  { font-size: 64px; line-height: 1; margin-bottom: 16px; }
+.welcome-title { font-size: 28px; font-weight: 700; color: #fafafa; margin-bottom: 10px; }
+.welcome-sub   { font-size: 16px; color: #737373; margin-bottom: 24px; line-height: 1.7; }
+.feature-pills {
     display: flex;
     gap: 10px;
     justify-content: center;
-    margin-top: 18px;
     flex-wrap: wrap;
+    margin-bottom: 28px;
 }
-.stat-pill {
-    background: #13151f;
-    border: 1px solid #222540;
+.feature-pill {
+    background: #222222;
+    border: 1px solid #333333;
+    padding: 4px 12px;
     border-radius: 20px;
-    padding: 4px 14px;
-    font-size: 12px;
-    color: #818cf8;
+    color: #fafafa;
+    font-size: 13px;
+}
+.welcome-hint { font-size: 13px; color: #737373; font-style: italic; }
+
+/* ── User bubble ── */
+.user-row {
+    display: flex;
+    justify-content: flex-end;
+    margin: 14px 0 2px 15%;
+}
+.user-bubble {
+    background: linear-gradient(135deg, #f59e0b, #fbbf24);
+    color: #111111;
+    padding: 12px 16px;
+    border-radius: 18px 18px 4px 18px;
+    font-size: 14px;
+    line-height: 1.6;
+    max-width: 70%;
+    word-break: break-word;
+    font-weight: 500;
+}
+.ts-right { font-size: 11px; color: #737373; text-align: right; margin: 2px 4px 12px; }
+.ts-left  { font-size: 11px; color: #737373; text-align: left;  margin: 2px 4px 8px; }
+
+/* ── Assistant bubble ── */
+.asst-row { display: flex; margin: 14px 15% 2px 0; }
+.asst-bubble {
+    background: #222222;
+    border-left: 3px solid #f59e0b;
+    border-radius: 4px 18px 18px 18px;
+    padding: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #fafafa;
+    word-break: break-word;
+    max-width: 85%;
+    width: 100%;
 }
 
-/* ── Chart container ── */
-.chart-wrap {
-    margin: 6px 0 4px 42px;
-    border: 1px solid #1e2235;
-    border-radius: 10px;
-    overflow: hidden;
+/* ── Error bubble ── */
+.error-row { display: flex; margin: 14px 15% 12px 0; }
+.error-bubble {
+    background: rgba(239, 68, 68, 0.07);
+    border: 1px solid rgba(239, 68, 68, 0.28);
+    border-radius: 4px 18px 18px 18px;
+    padding: 14px 16px;
+    color: #fca5a5;
+    font-size: 14px;
+    line-height: 1.6;
+    max-width: 85%;
 }
-.chart-reasoning {
-    font-size: 11.5px;
-    color: #384060;
-    font-style: italic;
-    margin: 4px 0 10px 42px;
+
+/* ── Report pre ── */
+.report-pre {
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    color: #e2e2e2;
+    white-space: pre-wrap;
+    background: #1a1a1a;
+    padding: 16px 18px;
+    border-radius: 8px;
+    border: 1px solid #333333;
+    overflow-x: auto;
 }
 
 /* ── Anomaly section ── */
-.anomaly-section { margin: 8px 0 4px 42px; }
+.anomaly-section { margin: 10px 0; }
 .anomaly-header {
-    font-size: 12px;
-    font-weight: 700;
-    color: #ef4444;
-    text-transform: uppercase;
-    letter-spacing: 0.09em;
-    margin-bottom: 7px;
+    font-size: 12px; font-weight: 700; color: #ef4444;
+    text-transform: uppercase; letter-spacing: .09em; margin-bottom: 8px;
 }
 .anomaly-interp {
-    font-size: 13px;
-    color: #b8c4da;
-    line-height: 1.65;
-    background: rgba(239, 68, 68, 0.06);
-    border: 1px solid rgba(239, 68, 68, 0.22);
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin-bottom: 10px;
+    font-size: 13px; color: #fafafa;
+    background: rgba(239,68,68,.06);
+    border: 1px solid rgba(239,68,68,.22);
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; line-height: 1.6;
 }
 .anomaly-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-family: 'JetBrains Mono', 'Cascadia Code', 'Courier New', monospace;
-    font-size: 11.5px;
+    width: 100%; border-collapse: collapse;
+    font-family: 'JetBrains Mono','Courier New',monospace; font-size: 11.5px;
 }
 .anomaly-table th {
-    background: rgba(239, 68, 68, 0.12);
-    color: #ef4444;
-    padding: 6px 10px;
-    text-align: left;
-    border-bottom: 1px solid rgba(239, 68, 68, 0.25);
-    white-space: nowrap;
+    background: rgba(239,68,68,.12); color: #ef4444;
+    padding: 6px 10px; text-align: left; border-bottom: 1px solid rgba(239,68,68,.25);
 }
 .anomaly-table td {
-    background: rgba(239, 68, 68, 0.05);
-    color: #fca5a5;
-    padding: 5px 10px;
-    border-bottom: 1px solid rgba(239, 68, 68, 0.1);
-    white-space: nowrap;
+    background: rgba(239,68,68,.05); color: #fca5a5;
+    padding: 5px 10px; border-bottom: 1px solid rgba(239,68,68,.1);
 }
 .anomaly-table tr:last-child td { border-bottom: none; }
 
-/* ── Executive summary card ── */
+/* ── Executive summary ── */
 .exec-card {
-    margin: 8px 0 4px 42px;
-    background: linear-gradient(160deg, #0f1221 0%, #131729 100%);
-    border: 1px solid #2a2d50;
-    border-radius: 14px;
-    overflow: hidden;
+    background: #1a1a1a; border: 1px solid #333333;
+    border-radius: 14px; overflow: hidden; margin: 10px 0;
 }
-.exec-card-header {
-    padding: 12px 20px 10px;
-    border-bottom: 1px solid #1e2235;
-}
+.exec-card-header { padding: 12px 20px 10px; border-bottom: 1px solid #333333; }
 .exec-card-label {
-    font-size: 10.5px;
-    font-weight: 700;
-    color: #4c51a0;
-    text-transform: uppercase;
-    letter-spacing: 0.13em;
+    font-size: 10.5px; font-weight: 700; color: #737373;
+    text-transform: uppercase; letter-spacing: .13em;
 }
 .exec-headline {
-    padding: 16px 20px 14px;
-    font-size: 15px;
-    font-weight: 600;
-    line-height: 1.55;
-    background: linear-gradient(135deg, #a5b4fc, #c4b5fd);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    border-bottom: 1px solid #181c2e;
+    padding: 16px 20px 14px; font-size: 15px; font-weight: 600;
+    color: #f59e0b; line-height: 1.55; border-bottom: 1px solid #333333;
 }
 .exec-section-label {
-    font-size: 10px;
-    font-weight: 700;
-    color: #384060;
-    text-transform: uppercase;
-    letter-spacing: 0.13em;
-    padding: 12px 20px 6px;
+    font-size: 10px; font-weight: 700; color: #737373;
+    text-transform: uppercase; letter-spacing: .13em; padding: 12px 20px 6px;
 }
-.exec-insights {
-    list-style: none;
-    margin: 0;
-    padding: 0 20px 14px;
-}
+.exec-insights { list-style: none; margin: 0; padding: 0 20px 14px; }
 .exec-insights li {
-    font-size: 13px;
-    color: #8fa0bc;
-    line-height: 1.65;
-    padding: 5px 0 5px 20px;
-    position: relative;
-    border-bottom: 1px solid #131627;
+    font-size: 13px; color: #fafafa; line-height: 1.65;
+    padding: 5px 0 5px 20px; position: relative; border-bottom: 1px solid #333333;
 }
 .exec-insights li:last-child { border-bottom: none; }
 .exec-insights li::before {
-    content: "▸";
-    position: absolute;
-    left: 0;
-    color: #6366f1;
-    font-size: 11px;
-    top: 7px;
+    content: "▸"; position: absolute; left: 0; color: #f59e0b; font-size: 11px; top: 7px;
 }
 .exec-action-wrap { padding: 0 20px 18px; }
 .exec-action {
-    background: rgba(99, 102, 241, 0.07);
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    border-radius: 8px;
-    padding: 10px 14px;
+    background: rgba(245,158,11,.07);
+    border: 1px solid rgba(245,158,11,.2); border-radius: 8px; padding: 10px 14px;
 }
 .exec-action-label {
-    font-size: 10px;
-    font-weight: 700;
-    color: #6366f1;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-bottom: 5px;
+    font-size: 10px; font-weight: 700; color: #f59e0b;
+    text-transform: uppercase; letter-spacing: .1em; margin-bottom: 5px;
 }
-.exec-action-text {
-    font-size: 13px;
-    color: #a5b4fc;
-    line-height: 1.6;
-}
+.exec-action-text { font-size: 13px; color: #fbbf24; line-height: 1.6; }
 
-/* ── At-risk table (executive summary) ── */
-.risk-section { margin: 6px 0 10px 42px; }
+/* ── Risk table ── */
+.risk-section { margin: 10px 0; }
 .risk-header {
-    font-size: 12px;
-    font-weight: 700;
-    color: #f59e0b;
-    text-transform: uppercase;
-    letter-spacing: 0.09em;
-    margin-bottom: 7px;
+    font-size: 12px; font-weight: 700; color: #f59e0b;
+    text-transform: uppercase; letter-spacing: .09em; margin-bottom: 7px;
 }
 .risk-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-family: 'JetBrains Mono', 'Cascadia Code', 'Courier New', monospace;
-    font-size: 11.5px;
+    width: 100%; border-collapse: collapse;
+    font-family: 'JetBrains Mono','Courier New',monospace; font-size: 11.5px;
 }
 .risk-table th {
-    background: rgba(245, 158, 11, 0.09);
-    color: #f59e0b;
-    padding: 6px 10px;
-    text-align: left;
-    border-bottom: 1px solid rgba(245, 158, 11, 0.2);
-    white-space: nowrap;
+    background: rgba(245,158,11,.09); color: #f59e0b;
+    padding: 6px 10px; text-align: left; border-bottom: 1px solid rgba(245,158,11,.2);
 }
 .risk-table td {
-    background: rgba(245, 158, 11, 0.04);
-    color: #fcd34d;
-    padding: 5px 10px;
-    border-bottom: 1px solid rgba(245, 158, 11, 0.08);
-    white-space: nowrap;
+    background: rgba(245,158,11,.04); color: #fcd34d;
+    padding: 5px 10px; border-bottom: 1px solid rgba(245,158,11,.08);
 }
 .risk-table tr:last-child td { border-bottom: none; }
 .risk-table td.risk-reason { color: #b45309; font-style: italic; }
 
-/* ── Chat input ── */
-[data-testid="stChatInput"] > div {
-    background: #191c2a !important;
-    border: 1px solid #2a2d48 !important;
-    border-radius: 14px !important;
-    box-shadow: 0 -2px 20px rgba(0,0,0,0.3);
+/* ── Typing indicator ── */
+.typing-row { display: flex; margin: 14px 15% 12px 0; }
+.typing-bubble {
+    background: #222222;
+    border-left: 3px solid #f59e0b;
+    border-radius: 4px 18px 18px 18px;
+    padding: 16px 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
 }
-[data-testid="stChatInput"] textarea {
-    color: #dde4f0 !important;
-    font-size: 14.5px !important;
+.typing-label { font-size: 13px; color: #737373; font-style: italic; }
+.typing-dots { display: flex; gap: 5px; align-items: center; }
+.typing-dots span {
+    width: 6px; height: 6px;
+    background: #f59e0b;
+    border-radius: 50%;
+    animation: dotPulse 1.4s ease-in-out infinite;
+    display: inline-block;
 }
-[data-testid="stChatInput"] textarea::placeholder {
-    color: #3a3f5c !important;
+.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dotPulse {
+    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+    40%           { opacity: 1;   transform: scale(1.1); }
 }
+
+/* ── New conversation button ── */
+.new-convo-btn > div > button {
+    background: transparent !important;
+    border: 1px solid #f59e0b !important;
+    border-radius: 8px !important;
+    color: #f59e0b !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    padding: 8px 16px !important;
+    width: 100% !important;
+    transition: background 0.2s !important;
+}
+.new-convo-btn > div > button:hover {
+    background: rgba(245, 158, 11, 0.12) !important;
+}
+
+/* ── Quick action card buttons ── */
+.card-btn > div > button {
+    width: 100% !important;
+    background: #222222 !important;
+    border: 1px solid #333333 !important;
+    border-radius: 10px !important;
+    padding: 10px 8px !important;
+    color: #fafafa !important;
+    font-size: 12px !important;
+    text-align: left !important;
+    white-space: normal !important;
+    height: auto !important;
+    min-height: 52px !important;
+    line-height: 1.4 !important;
+    transition: background 0.2s, border-color 0.2s !important;
+}
+.card-btn > div > button:hover {
+    background: #2a2a2a !important;
+    border-color: #f59e0b !important;
+}
+
+/* ── History buttons ── */
+.hist-btn > div > button {
+    width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid #2a2a2a !important;
+    border-radius: 0 !important;
+    color: #737373 !important;
+    font-size: 12px !important;
+    text-align: left !important;
+    padding: 6px 4px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 100% !important;
+    transition: color 0.2s !important;
+}
+.hist-btn > div > button:hover {
+    color: #fafafa !important;
+    background: transparent !important;
+}
+
+/* ── Response action ghost buttons ── */
+.action-ghost > div > button,
+.action-ghost [data-testid="stDownloadButton"] > button {
+    background: none !important;
+    border: none !important;
+    color: #737373 !important;
+    font-size: 12px !important;
+    padding: 4px 8px !important;
+    border-radius: 6px !important;
+    transition: color 0.2s, background 0.2s !important;
+    min-width: auto !important;
+}
+.action-ghost > div > button:hover,
+.action-ghost [data-testid="stDownloadButton"] > button:hover {
+    color: #f59e0b !important;
+    background: rgba(245, 158, 11, 0.08) !important;
+}
+
+/* ── Sidebar helpers ── */
+.sidebar-section-label {
+    font-size: 10px; font-weight: 700; color: #737373;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin: 18px 0 8px; display: block;
+}
+.sidebar-divider {
+    border: none; border-top: 1px solid #f59e0b;
+    opacity: 0.35; margin: 16px 0;
+}
+
+/* ── KB hint ── */
+.kb-hint { font-size: 11px; color: #737373; text-align: center; padding: 4px 0 8px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Session state initialisation ──────────────────────────────────────────────
 
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-if "messages" not in st.session_state:
-    # Each entry: {"role": "user"|"assistant", "content": str|dict}
-    st.session_state.messages = []
-if "pending_query" not in st.session_state:
-    st.session_state.pending_query = None
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _ts() -> str:
+    return datetime.now().strftime("%H:%M")
+
+
+def _update_history(query: str) -> None:
+    hist = st.session_state.query_history
+    if query in hist:
+        hist.remove(query)
+    hist.insert(0, query)
+    st.session_state.query_history = hist[:5]
+
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("""
-        <div style='padding: 22px 0 10px; text-align: center;'>
-            <div style='font-size: 46px;'>📊</div>
-            <div style='font-size: 21px; font-weight: 700; color: #e2e8f0; margin: 10px 0 5px;'>
+        <div style='padding:24px 0 12px; text-align:center;'>
+            <div style='font-size:48px; line-height:1;'>📊</div>
+            <div style='font-size:20px; font-weight:700; color:#fafafa; margin:10px 0 4px;'>
                 OLAP Assistant
             </div>
-            <div style='font-size: 11px; color: #383d5c; letter-spacing: 0.1em; text-transform: uppercase;'>
-                Retail Sales · 2022 – 2024
+            <div style='font-size:11px; color:#737373; letter-spacing:0.08em;'>
+                Retail Sales · 2022–2024
             </div>
         </div>
-        <div style='border-top: 1px solid #1c1f30; margin: 14px 0 18px;'></div>
+        <hr class='sidebar-divider' />
     """, unsafe_allow_html=True)
 
-    # New conversation button
+    # New conversation
     st.markdown('<div class="new-convo-btn">', unsafe_allow_html=True)
     if st.button("⊕  New Conversation", use_container_width=True, key="new_convo"):
         try:
@@ -484,42 +473,50 @@ with st.sidebar:
                 timeout=5,
             )
         except Exception:
-            pass  # server may be offline; still reset locally
-        st.session_state.session_id = str(uuid.uuid4())
-        st.session_state.messages = []
+            pass
+        st.session_state.session_id    = str(uuid.uuid4())
+        st.session_state.messages      = []
+        st.session_state.show_welcome  = True
+        st.session_state.query_history = []
+        st.session_state.last_query    = ""
+        st.session_state.input_value   = ""
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-    short_id = st.session_state.session_id[:8] + "…"
-    st.markdown(
-        f"<div style='font-size: 10.5px; color: #252840; font-family: monospace;"
-        f"text-align: center; margin: 8px 0 20px;'>{short_id}</div>",
-        unsafe_allow_html=True,
-    )
+    # Query history
+    st.markdown('<span class="sidebar-section-label">RECENT</span>', unsafe_allow_html=True)
+    if st.session_state.query_history:
+        for qi, q in enumerate(st.session_state.query_history):
+            label = f"🕐 {q[:35]}{'...' if len(q) > 35 else ''}"
+            st.markdown('<div class="hist-btn">', unsafe_allow_html=True)
+            if st.button(label, key=f"hist_{qi}", use_container_width=True):
+                st.session_state.input_value = q
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(
+            "<div style='font-size:12px; color:#737373; padding:6px 0 10px;'>"
+            "No recent queries</div>",
+            unsafe_allow_html=True,
+        )
 
-    # Example queries
-    st.markdown("""
-        <div style='font-size: 11.5px; font-weight: 700; color: #3d4466;
-        text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 9px;'>
-            Quick Examples
-        </div>
-    """, unsafe_allow_html=True)
+    # Quick action cards — 2-column grid
+    st.markdown('<span class="sidebar-section-label">QUICK ACTIONS</span>', unsafe_allow_html=True)
+    for row_start in range(0, len(PROMPT_TEMPLATES), 2):
+        pair = PROMPT_TEMPLATES[row_start:row_start + 2]
+        cols = st.columns(2)
+        for col, (icon, label, template) in zip(cols, pair):
+            with col:
+                st.markdown('<div class="card-btn">', unsafe_allow_html=True)
+                if st.button(f"{icon} {label}", key=f"tpl_{label}", use_container_width=True):
+                    st.session_state.input_value = template
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
 
-    for example in EXAMPLE_QUERIES:
-        if st.button(f"› {example}", use_container_width=True, key=f"ex__{example}"):
-            st.session_state.pending_query = example
-
-    st.markdown("""
-        <div style='border-top: 1px solid #1c1f30; margin: 20px 0 14px;'></div>
-        <div style='font-size: 10.5px; color: #252840; text-align: center; line-height: 1.8;'>
-            Claude · DuckDB · FastAPI · Streamlit
-        </div>
-    """, unsafe_allow_html=True)
 
 # ── API helpers ───────────────────────────────────────────────────────────────
 
 def call_query_api(query: str, session_id: str) -> dict:
-    """POST /query and return parsed JSON, or an error dict on failure."""
     try:
         resp = requests.post(
             f"{API_BASE}/query",
@@ -537,82 +534,88 @@ def call_query_api(query: str, session_id: str) -> dict:
             ),
         }
     except requests.exceptions.Timeout:
-        return {
-            "status": "error",
-            "message": "Request timed out (90 s). The query may be too complex.",
-        }
+        return {"status": "error", "message": "Request timed out (90 s). The query may be too complex."}
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
 
+
 # ── Render helpers ────────────────────────────────────────────────────────────
 
+def render_user_bubble(text: str, ts: str = "") -> None:
+    safe = html.escape(text)
+    st.markdown(
+        f'<div class="user-row"><div class="user-bubble">{safe}</div></div>'
+        f'<div class="ts-right">{ts}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_typing_indicator():
+    ph = st.empty()
+    ph.markdown("""
+        <div class="typing-row">
+            <div class="typing-bubble">
+                <span class="typing-label">Analyzing data</span>
+                <div class="typing-dots">
+                    <span></span><span></span><span></span>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    return ph
+
+
 def render_plotly_chart(result: dict) -> None:
-    """Render a Plotly figure from result["figure_json"] if present."""
     figure_json = result.get("figure_json")
     if not figure_json:
         return
     try:
         fig = pio.from_json(json.dumps(figure_json))
-        st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        st.markdown("</div>", unsafe_allow_html=True)
     except Exception:
-        return  # silently skip broken figures
+        return
 
-    reasoning = result.get("chart_reasoning", "")
-    if reasoning:
-        st.markdown(
-            f'<div class="chart-reasoning">'
-            f'📈&nbsp;{html.escape(reasoning)}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    raw = result.get("table") or result.get("rows")
+    if raw:
+        with st.expander("🗂  View Raw Data"):
+            try:
+                df = pd.DataFrame(raw)
+                st.dataframe(df, use_container_width=True)
+            except Exception:
+                st.json(raw)
 
 
 def render_anomaly_table(result: dict) -> None:
-    """Render anomaly rows highlighted in red, plus the interpretation."""
     anomalies = result.get("anomalies")
     if not anomalies or result.get("anomaly_count", 0) == 0:
         return
 
-    interpretation = result.get("interpretation", "")
+    interp = result.get("interpretation", "")
     interp_html = (
-        f'<div class="anomaly-interp">{html.escape(interpretation)}</div>'
-        if interpretation else ""
+        f'<div class="anomaly-interp">{html.escape(interp)}</div>' if interp else ""
     )
 
-    # Build HTML table from anomaly rows
     cols = list(anomalies[0].keys())
-    header_cells = "".join(
-        f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in cols
-    )
-    rows_html = ""
-    for row in anomalies:
-        cells = "".join(
+    hdr  = "".join(f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in cols)
+    body = "".join(
+        "<tr>" + "".join(
             f"<td>{html.escape(str(row.get(c, '')))}</td>" for c in cols
-        )
-        rows_html += f"<tr>{cells}</tr>"
-
-    table_html = (
-        f'<table class="anomaly-table">'
-        f"<thead><tr>{header_cells}</tr></thead>"
-        f"<tbody>{rows_html}</tbody>"
-        f"</table>"
+        ) + "</tr>"
+        for row in anomalies
     )
-
     count = result["anomaly_count"]
     st.markdown(
         f'<div class="anomaly-section">'
         f'<div class="anomaly-header">⚠ {count} anomal{"y" if count == 1 else "ies"} detected</div>'
-        f"{interp_html}"
-        f"{table_html}"
-        f"</div>",
+        f'{interp_html}'
+        f'<table class="anomaly-table"><thead><tr>{hdr}</tr></thead>'
+        f'<tbody>{body}</tbody></table>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
 
 def render_executive_summary(result: dict) -> None:
-    """Render headline, bullet insights, recommended action, and at-risk table."""
     headline = result.get("exec_headline", "")
     insights = result.get("exec_insights", [])
     action   = result.get("exec_action", "")
@@ -621,31 +624,23 @@ def render_executive_summary(result: dict) -> None:
     if not headline and not insights:
         return
 
-    # ── headline ───────────────────────────────────────────────────────────
-    headline_html = (
-        f'<div class="exec-headline">{html.escape(headline)}</div>'
-        if headline else ""
+    hl_html = (
+        f'<div class="exec-headline">{html.escape(headline)}</div>' if headline else ""
     )
-
-    # ── bullet insights ────────────────────────────────────────────────────
-    bullets_html = ""
+    bl_html = ""
     if insights:
-        items = "".join(f"<li>{html.escape(b)}</li>" for b in insights)
-        bullets_html = (
+        items   = "".join(f"<li>{html.escape(b)}</li>" for b in insights)
+        bl_html = (
             '<div class="exec-section-label">Key Insights</div>'
             f'<ul class="exec-insights">{items}</ul>'
         )
-
-    # ── recommended action ─────────────────────────────────────────────────
-    action_html = ""
+    ac_html = ""
     if action:
-        action_html = (
-            '<div class="exec-action-wrap">'
-            '<div class="exec-action">'
+        ac_html = (
+            '<div class="exec-action-wrap"><div class="exec-action">'
             '<div class="exec-action-label">Recommended Action</div>'
             f'<div class="exec-action-text">{html.escape(action)}</div>'
-            '</div>'
-            '</div>'
+            '</div></div>'
         )
 
     st.markdown(
@@ -653,124 +648,133 @@ def render_executive_summary(result: dict) -> None:
         '<div class="exec-card-header">'
         '<span class="exec-card-label">Executive Summary</span>'
         '</div>'
-        f'{headline_html}'
-        f'{bullets_html}'
-        f'{action_html}'
+        f'{hl_html}{bl_html}{ac_html}'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # ── at-risk table ──────────────────────────────────────────────────────
     if risks:
-        # Put risk_reason last for readability
         all_cols  = list(risks[0].keys())
         data_cols = [c for c in all_cols if c != "risk_reason"]
         cols      = data_cols + (["risk_reason"] if "risk_reason" in all_cols else [])
-
-        header_cells = "".join(
+        hdr = "".join(
             f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
         )
-        rows_html = ""
+        body = ""
         for row in risks:
-            cells = ""
-            for c in cols:
-                cls = ' class="risk-reason"' if c == "risk_reason" else ""
-                cells += f'<td{cls}>{html.escape(str(row.get(c, "")))}</td>'
-            rows_html += f"<tr>{cells}</tr>"
-
-        count = len(risks)
+            body += "<tr>" + "".join(
+                f'<td{" class=\"risk-reason\"" if c == "risk_reason" else ""}>'
+                f'{html.escape(str(row.get(c, "")))}</td>'
+                for c in cols
+            ) + "</tr>"
         st.markdown(
             f'<div class="risk-section">'
-            f'<div class="risk-header">⚡ {count} at-risk area{"s" if count != 1 else ""}</div>'
-            f'<table class="risk-table">'
-            f'<thead><tr>{header_cells}</tr></thead>'
-            f'<tbody>{rows_html}</tbody>'
-            f'</table>'
+            f'<div class="risk-header">'
+            f'⚡ {len(risks)} at-risk area{"s" if len(risks) != 1 else ""}'
+            f'</div>'
+            f'<table class="risk-table"><thead><tr>{hdr}</tr></thead>'
+            f'<tbody>{body}</tbody></table>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
 
-def render_user_bubble(text: str) -> None:
-    safe = html.escape(text)
-    st.markdown(
-        f'<div class="user-row"><div class="user-bubble">{safe}</div></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def render_assistant_bubble(result: dict, is_last: bool) -> None:
-    """Render one assistant turn: summary bubble + optional report expander + metadata."""
-    # ── Error state ────────────────────────────────────────────────────────
+def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str = "") -> None:
+    # Error state
     if result.get("status") == "error":
         msg = html.escape(result.get("message", "An unknown error occurred."))
         st.markdown(
-            f"""
-            <div class="error-row">
-                <div class="asst-avatar">🤖</div>
-                <div class="error-bubble">⚠&nbsp;&nbsp;{msg}</div>
-            </div>
-            """,
+            f'<div class="error-row"><div class="error-bubble">⚠&nbsp;&nbsp;{msg}</div></div>'
+            f'<div class="ts-left">{ts}</div>',
             unsafe_allow_html=True,
         )
         return
 
-    # ── Success state ──────────────────────────────────────────────────────
-    report_text   = result.get("report", "")
-    section_count = result.get("section_count", 0)
-    routing       = result.get("_routing", {})
-    steps         = routing.get("steps", [])
-    reasoning     = routing.get("reasoning", "")
-
-    # Build a one-line summary for the bubble
-    step_chain    = " → ".join(
-        f"{s.get('agent','?')}.{s.get('method','?')}" for s in steps
-    )
+    # Bubble header content
     exec_headline = result.get("exec_headline", "")
-    sections_label = f"{section_count} section{'s' if section_count != 1 else ''}"
-    chain_html = (
-        f"&nbsp;·&nbsp;<code style='font-size:12px; color:#818cf8;'>{html.escape(step_chain)}</code>"
-        if step_chain else ""
-    )
-    # When an executive summary is present, show its headline in the bubble
+    section_count = result.get("section_count", 0)
+    report_text   = result.get("report", "")
+
     if exec_headline:
+        excerpt = html.escape(exec_headline[:160]) + ("…" if len(exec_headline) > 160 else "")
         bubble_body = (
-            f"<strong style='background:linear-gradient(135deg,#a5b4fc,#c4b5fd);"
-            f"-webkit-background-clip:text;-webkit-text-fill-color:transparent;'>"
-            f"{html.escape(exec_headline[:140])}"
-            f"{'…' if len(exec_headline) > 140 else ''}"
-            f"</strong>{chain_html}"
+            f'<span style="font-weight:600; color:#f59e0b; font-size:15px;">'
+            f'{excerpt}</span>'
         )
     else:
-        bubble_body = f"<strong>{sections_label}</strong>{chain_html}"
+        s = "sections" if section_count != 1 else "section"
+        bubble_body = f'<strong style="color:#fafafa;">{section_count} {s}</strong>'
 
     st.markdown(
-        f"""
-        <div class="asst-row">
-            <div class="asst-avatar">🤖</div>
-            <div class="asst-bubble">{bubble_body}</div>
-        </div>
-        """,
+        f'<div class="asst-row"><div class="asst-bubble">{bubble_body}</div></div>'
+        f'<div class="ts-left">{ts}</div>',
         unsafe_allow_html=True,
     )
 
-    # ── Full report in expander ────────────────────────────────────────────
+    # Full report expander
     if report_text:
         with st.expander("📄  View Full Report", expanded=is_last):
-            safe_report = html.escape(report_text).replace('$', '&#36;')
-            st.markdown(
-                f'<div class="report-pre">{safe_report}</div>',
-                unsafe_allow_html=True,
-            )
+            safe_r = html.escape(report_text).replace("$", "&#36;")
+            st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
 
-    # ── Plotly chart (visualization agent) ────────────────────────────────
+    # Chart (+ optional raw data expander)
     render_plotly_chart(result)
 
-    # ── Anomaly table (anomaly detection agent) ────────────────────────────
+    # Anomaly table
     render_anomaly_table(result)
 
-    # ── Executive summary card ─────────────────────────────────────────────
+    # Executive summary card
     render_executive_summary(result)
+
+    # Response action buttons
+    orig_query = result.get("_query", "")
+    c1, c2, c3, _pad = st.columns([1, 1, 1, 7])
+
+    with c1:
+        st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
+        if st.button("📋 Copy", key=f"copy_{msg_idx}", help="Copy report to clipboard"):
+            text_to_copy = report_text or exec_headline or ""
+            safe_js = (
+                text_to_copy
+                .replace("\\", "\\\\")
+                .replace("`", "\\`")
+                .replace("$", "\\$")
+            )
+            components.html(
+                f"<script>"
+                f"navigator.clipboard.writeText(`{safe_js}`)"
+                f".catch(function(){{"
+                f"  var t=document.createElement('textarea');"
+                f"  t.value=`{safe_js}`;"
+                f"  document.body.appendChild(t);"
+                f"  t.select();"
+                f"  document.execCommand('copy');"
+                f"  document.body.removeChild(t);"
+                f"}});"
+                f"</script>",
+                height=0,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with c2:
+        if report_text:
+            st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
+            st.download_button(
+                "💾 Download",
+                data=report_text,
+                file_name="report.txt",
+                mime="text/plain",
+                key=f"dl_{msg_idx}",
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    with c3:
+        if orig_query:
+            st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
+            if st.button("🔄 Re-run", key=f"rerun_{msg_idx}"):
+                st.session_state.input_value = orig_query
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ── Main chat area ────────────────────────────────────────────────────────────
@@ -781,45 +785,61 @@ if not st.session_state.messages:
             <div class="welcome-card">
                 <div class="welcome-icon">📊</div>
                 <div class="welcome-title">OLAP Sales Assistant</div>
-                <div class="welcome-body">
-                    Ask natural-language questions about retail sales data spanning
-                    <strong style='color:#818cf8;'>January 2022 – December 2024</strong>.
+                <div class="welcome-sub">
+                    Ask natural-language questions about your retail data
                 </div>
-                <div class="stat-row">
-                    <span class="stat-pill">🌍 20 countries</span>
-                    <span class="stat-pill">🗂 4 regions</span>
-                    <span class="stat-pill">📦 4 categories</span>
-                    <span class="stat-pill">👥 3 segments</span>
+                <div class="feature-pills">
+                    <span class="feature-pill">📅 2022–2024</span>
+                    <span class="feature-pill">🌍 4 Regions</span>
+                    <span class="feature-pill">📦 4 Categories</span>
                 </div>
-                <div class="welcome-hint">
-                    ← Pick a quick example from the sidebar, or type a question below.
-                </div>
+                <div class="welcome-hint">← Pick a quick action or type below</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
 else:
     last_idx = len(st.session_state.messages) - 1
     for i, msg in enumerate(st.session_state.messages):
+        ts = msg.get("ts", "")
         if msg["role"] == "user":
-            render_user_bubble(msg["content"])
+            render_user_bubble(msg["content"], ts=ts)
         else:
-            render_assistant_bubble(msg["content"], is_last=(i == last_idx))
+            render_assistant_bubble(
+                msg["content"], msg_idx=i, is_last=(i == last_idx), ts=ts
+            )
 
-# ── Chat input ────────────────────────────────────────────────────────────────
+# ── Input area ────────────────────────────────────────────────────────────────
 
-user_input = st.chat_input("Ask about your sales data…")
+user_input = st.chat_input("Ask about your sales data...")
 
-# Sidebar example buttons set pending_query; pick it up in the same render pass
-if not user_input and st.session_state.pending_query:
-    user_input = st.session_state.pending_query
-    st.session_state.pending_query = None
+# Template / history clicks pre-populate as auto-send
+if not user_input and st.session_state.input_value:
+    user_input = st.session_state.input_value
+    st.session_state.input_value = ""
 
 if user_input:
-    # Append user message immediately so it appears in the next render
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.show_welcome = False
+    st.session_state.last_query   = user_input
+    _update_history(user_input)
+    ts_now = _ts()
 
-    with st.spinner("🔍  Routing your query through the OLAP agents…"):
-        result = call_query_api(user_input, st.session_state.session_id)
+    st.session_state.messages.append({"role": "user", "content": user_input, "ts": ts_now})
 
-    st.session_state.messages.append({"role": "assistant", "content": result})
+    # Show typing indicator while waiting
+    typing_ph = render_typing_indicator()
+
+    # Call API
+    result = call_query_api(user_input, st.session_state.session_id)
+    result["_query"] = user_input
+
+    # Clear typing indicator
+    typing_ph.empty()
+
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": result,
+        "ts": _ts(),
+    })
     st.rerun()
+
+st.markdown('<div class="kb-hint">Press Enter to send</div>', unsafe_allow_html=True)
