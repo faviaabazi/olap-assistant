@@ -662,11 +662,11 @@ def render_executive_summary(result: dict) -> None:
         )
         body = ""
         for row in risks:
-            body += "<tr>" + "".join(
-                f'<td{" class=\"risk-reason\"" if c == "risk_reason" else ""}>'
-                f'{html.escape(str(row.get(c, "")))}</td>'
-                for c in cols
-            ) + "</tr>"
+            cells = ""
+            for c in cols:
+                cls = ' class="risk-reason"' if c == "risk_reason" else ""
+                cells += f'<td{cls}>{html.escape(str(row.get(c, "")))}</td>'
+            body += f"<tr>{cells}</tr>"
         st.markdown(
             f'<div class="risk-section">'
             f'<div class="risk-header">'
@@ -810,12 +810,36 @@ else:
 
 # ── Input area ────────────────────────────────────────────────────────────────
 
-user_input = st.chat_input("Ask about your sales data...")
-
-# Template / history clicks pre-populate as auto-send
-if not user_input and st.session_state.input_value:
-    user_input = st.session_state.input_value
+# If a card or history item was clicked, inject JS to pre-populate the textarea.
+# This does NOT send the query — the user edits the text and presses Enter themselves.
+if st.session_state.input_value:
+    _tpl = (
+        st.session_state.input_value
+        .replace("\\", "\\\\")
+        .replace("`", "\\`")
+    )
     st.session_state.input_value = ""
+    components.html(f"""
+    <script>
+    (function() {{
+        function inject() {{
+            var ta = window.parent.document.querySelector(
+                '[data-testid="stChatInputTextArea"]'
+            );
+            if (!ta) {{ setTimeout(inject, 100); return; }}
+            var setter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype, 'value'
+            ).set;
+            setter.call(ta, `{_tpl}`);
+            ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            ta.focus();
+        }}
+        inject();
+    }})();
+    </script>
+    """, height=0)
+
+user_input = st.chat_input("Ask about your sales data...")
 
 if user_input:
     st.session_state.show_welcome = False
