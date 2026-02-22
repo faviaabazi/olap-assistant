@@ -473,6 +473,29 @@ div[data-testid="stChatInput"],
 .simple-summary {
     font-size: 13px; color: #a0a0a0; margin-top: 10px; line-height: 1.6;
 }
+
+/* ── Direct answer ── */
+.direct-answer {
+    font-size: 22px; font-weight: 700; color: #f59e0b;
+    line-height: 1.45; margin: 6px 0 14px;
+}
+.direct-table {
+    width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0 12px;
+}
+.direct-table th {
+    background: #2a2a2a; color: #737373; padding: 6px 10px; text-align: left;
+    border-bottom: 1px solid #333333;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    white-space: nowrap;
+}
+.direct-table td {
+    padding: 6px 10px; border-bottom: 1px solid #2a2a2a; color: #e2e2e2;
+    white-space: nowrap; font-size: 12px;
+}
+.direct-table tr:last-child td { border-bottom: none; }
+.direct-brief {
+    font-size: 13px; color: #737373; line-height: 1.55; margin-top: 6px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -682,6 +705,46 @@ def render_simple(result: dict) -> None:
         )
 
 
+def render_direct(result: dict) -> None:
+    """Render a direct factual answer: large answer, small table, muted brief."""
+    answer = result.get("answer", "")
+    rows   = result.get("supporting_data", [])
+    brief  = result.get("brief", "")
+
+    if answer:
+        st.markdown(
+            f'<div class="direct-answer">{html.escape(answer)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    if rows:
+        cols = list(rows[0].keys())
+        hdr  = "".join(
+            f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
+        )
+        body = ""
+        for row in rows:
+            cells = ""
+            for c in cols:
+                val = row.get(c)
+                if val is None:
+                    cells += '<td style="color:#555;">—</td>'
+                else:
+                    cells += f"<td>{_fmt_cell(val)}</td>"
+            body += f"<tr>{cells}</tr>"
+        st.markdown(
+            f'<table class="direct-table"><thead><tr>{hdr}</tr></thead>'
+            f'<tbody>{body}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+
+    if brief:
+        st.markdown(
+            f'<div class="direct-brief">{html.escape(brief)}</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def render_user_bubble(text: str, ts: str = "") -> None:
     safe = html.escape(text)
     st.markdown(
@@ -846,6 +909,11 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
     elif response_mode == "comparison":
         n = len(result.get("result_rows", []))
         bubble_body = f'<strong style="color:#fafafa;">📊 {n}-row comparison</strong>'
+    elif response_mode == "direct":
+        short = html.escape((result.get("answer") or "")[:120])
+        bubble_body = (
+            f'<span style="font-weight:600; color:#f59e0b;">{short}</span>'
+        )
     elif response_mode == "simple":
         n = len(result.get("result_rows", []))
         bubble_body = f'<strong style="color:#fafafa;">✓ {n} result{"s" if n != 1 else ""}</strong>'
@@ -862,7 +930,10 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
     )
 
     # Content — dispatch on response mode
-    if response_mode == "chart":
+    if response_mode == "direct":
+        render_direct(result)
+
+    elif response_mode == "chart":
         render_plotly_chart(result)
 
     elif response_mode == "executive":

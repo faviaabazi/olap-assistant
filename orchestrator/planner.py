@@ -53,15 +53,22 @@ _COMPARISON_KEYWORDS = frozenset({
     "year over year", "month over month",
 })
 
+_DIRECT_PREFIXES = (
+    "which", "what is", "what was", "what are", "what were",
+    "who is", "who are", "how much", "how many", "is there", "are there",
+    "what's", "who's",
+)
+
 
 def _detect_response_mode(query: str, steps: list[dict]) -> str:
     """
     Determine how the frontend should render the response.
 
-    Priority order: chart > executive > comparison > simple > report
+    Priority order: chart > executive > comparison > direct > simple > report
     - chart      : plan contains a visualization step
     - executive  : plan contains an executive_summary step
     - comparison : query uses comparison / growth / YoY / MoM keywords
+    - direct     : factual question expecting a single clear answer
     - simple     : single-step query returning one ranked or margin table
     - report     : everything else
     """
@@ -70,9 +77,15 @@ def _detect_response_mode(query: str, steps: list[dict]) -> str:
         return "chart"
     if "executive_summary" in agent_names:
         return "executive"
-    q = query.lower()
+    q = query.lower().strip()
     if any(kw in q for kw in _COMPARISON_KEYWORDS):
         return "comparison"
+    if (
+        any(q.startswith(p) for p in _DIRECT_PREFIXES)
+        and len(steps) == 1
+        and steps[0].get("agent") not in {"visualization", "executive_summary", "anomaly"}
+    ):
+        return "direct"
     if len(steps) == 1 and steps[0].get("method") in {
         "top_n", "profit_margins", "slice", "dice"
     }:
@@ -350,51 +363,12 @@ class Planner:
             result["title"] = step.get("title", "")
             agent_results.append(result)
 
-        # 4. Pass results through ReportGenerator — skip agents that produce no
-        #    table rows (visualization renders a chart; executive_summary renders
-        #    a structured card). Including them produces empty "(no data)" sections.
-        _NO_TABLE_OPS = {"visualization", "executive_summary"}
-        report_inputs = [
-            ar for ar in agent_results
-            if ar.get("operation") not in _NO_TABLE_OPS
-        ]
-        report = self.reporter.full_report(report_inputs)
-
-        # 4b. Bubble up figure_json and anomaly data to the top-level response
-        #     so the frontend can render charts and highlighted tables directly.
-        for ar in agent_results:
-            if "figure_json" in ar and "figure_json" not in report:
-                report["figure_json"]    = ar["figure_json"]
-                report["chart_type"]     = ar.get("chart_type", "")
-                report["chart_reasoning"] = ar.get("reasoning", "")
-            if ar.get("anomaly_count", 0) > 0 and "anomalies" not in report:
-                report["anomalies"]      = ar["anomalies"]
-                report["anomaly_count"]  = ar["anomaly_count"]
-                report["interpretation"] = ar.get("interpretation", "")
-            if ar.get("operation") == "executive_summary" and "exec_headline" not in report:
-                report["exec_headline"] = ar.get("headline", "")
-                report["exec_insights"] = ar.get("insights", [])
-                report["exec_action"]   = ar.get("recommended_action", "")
-                report["exec_risks"]    = ar.get("risks", [])
-
-        # 4c. Attach response mode and bubble up result rows for simple/comparison
-        report["response_mode"] = response_mode
-
-        if response_mode in ("simple", "comparison"):
-            for ar in agent_results:
-                rows = ar.get("rows") or ar.get("all_rows") or []
-                if rows and "result_rows" not in report:
-                    report["result_rows"] = rows
-                    break
-
-        # 4d. Generate a short takeaway text for comparison and simple results
-        if response_mode == "comparison" and report.get("result_rows"):
-            report["comparison_takeaway"] = self._short_summary(
-                user_query, report["result_rows"], "comparison"
-            )
-        elif response_mode == "simple" and report.get("result_rows"):
-            report["simple_summary"] = self._short_summary(
-                user_query, report["result_rows"], "simple"
+        # 4. Direct mode — lightweight response, skip full report
+        if response_mode == "direct":
+            report = self._build_direct_response(user_query, agent_results, steps, reasoning)
+        else:
+            report = self._build_standard_response(
+                user_query, agent_results, steps, reasoning, response_mode
             )
 
         # 5. Record the assistant turn (store just the text summary)
@@ -497,6 +471,121 @@ class Planner:
                 "operation": method_name,
                 "message":   f"{type(exc).__name__}: {exc}",
             }
+
+    def _build_direct_response(
+        self,
+        user_query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        reasoning: str,
+    ) -> dict:
+        """Build a lightweight direct-answer response (no full report, no exec summary)."""
+        # Gather rows from the first agent result that has data
+        rows: list[dict] = []
+        for ar in agent_results:
+            rows = ar.get("rows") or ar.get("all_rows") or []
+            if rows:
+                break
+
+        supporting_data = rows[:3]
+
+        # Generate a one-sentence answer + brief context via Haiku
+        answer = ""
+        brief  = ""
+        if rows:
+            preview = json.dumps(rows[:6], default=str)
+            try:
+                resp = self.client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=180,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            f"Question: {user_query}\n"
+                            f"Data: {preview}\n\n"
+                            "Reply in EXACTLY this JSON format (no markdown):\n"
+                            '{"answer": "<1 sentence direct answer with key number>", '
+                            '"brief": "<1-2 sentence additional context>"}'
+                        ),
+                    }],
+                )
+                text = resp.content[0].text.strip() if resp.content else ""
+                parsed = json.loads(text)
+                answer = parsed.get("answer", "")
+                brief  = parsed.get("brief", "")
+            except Exception:
+                # Fallback: use the simple summary approach
+                answer = self._short_summary(user_query, rows, "simple")
+                brief  = ""
+
+        return {
+            "status":          "ok",
+            "response_mode":   "direct",
+            "answer":          answer,
+            "supporting_data": supporting_data,
+            "brief":           brief,
+            "report":          answer,
+            "section_count":   1,
+            "_routing":        {"reasoning": reasoning, "steps": steps},
+        }
+
+    def _build_standard_response(
+        self,
+        user_query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        reasoning: str,
+        response_mode: str,
+    ) -> dict:
+        """Build the standard multi-section report response."""
+        # Pass results through ReportGenerator — skip agents that produce no
+        # table rows (visualization renders a chart; executive_summary renders
+        # a structured card). Including them produces empty "(no data)" sections.
+        _NO_TABLE_OPS = {"visualization", "executive_summary"}
+        report_inputs = [
+            ar for ar in agent_results
+            if ar.get("operation") not in _NO_TABLE_OPS
+        ]
+        report = self.reporter.full_report(report_inputs)
+
+        # Bubble up figure_json and anomaly data to the top-level response
+        # so the frontend can render charts and highlighted tables directly.
+        for ar in agent_results:
+            if "figure_json" in ar and "figure_json" not in report:
+                report["figure_json"]    = ar["figure_json"]
+                report["chart_type"]     = ar.get("chart_type", "")
+                report["chart_reasoning"] = ar.get("reasoning", "")
+            if ar.get("anomaly_count", 0) > 0 and "anomalies" not in report:
+                report["anomalies"]      = ar["anomalies"]
+                report["anomaly_count"]  = ar["anomaly_count"]
+                report["interpretation"] = ar.get("interpretation", "")
+            if ar.get("operation") == "executive_summary" and "exec_headline" not in report:
+                report["exec_headline"] = ar.get("headline", "")
+                report["exec_insights"] = ar.get("insights", [])
+                report["exec_action"]   = ar.get("recommended_action", "")
+                report["exec_risks"]    = ar.get("risks", [])
+
+        # Attach response mode and bubble up result rows for simple/comparison
+        report["response_mode"] = response_mode
+
+        if response_mode in ("simple", "comparison"):
+            for ar in agent_results:
+                rows = ar.get("rows") or ar.get("all_rows") or []
+                if rows and "result_rows" not in report:
+                    report["result_rows"] = rows
+                    break
+
+        # Generate a short takeaway text for comparison and simple results
+        if response_mode == "comparison" and report.get("result_rows"):
+            report["comparison_takeaway"] = self._short_summary(
+                user_query, report["result_rows"], "comparison"
+            )
+        elif response_mode == "simple" and report.get("result_rows"):
+            report["simple_summary"] = self._short_summary(
+                user_query, report["result_rows"], "simple"
+            )
+
+        return report
 
     def _short_summary(self, query: str, rows: list[dict], mode: str) -> str:
         """
