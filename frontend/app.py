@@ -54,6 +54,7 @@ _DEFAULTS: dict = {
     "query_history": [],
     "input_value":   "",
     "last_query":    "",
+    "pinned":        [],
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -524,6 +525,28 @@ div[data-testid="stChatInput"],
     background: rgba(245, 158, 11, 0.1) !important;
     border-color: #f59e0b !important;
 }
+
+/* ── Pin buttons ── */
+.pin-btn > div > button {
+    width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid #2a2a2a !important;
+    border-radius: 0 !important;
+    color: #f59e0b !important;
+    font-size: 12px !important;
+    text-align: left !important;
+    padding: 6px 4px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 100% !important;
+    transition: color 0.2s !important;
+}
+.pin-btn > div > button:hover {
+    color: #ef4444 !important;
+    background: transparent !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -724,6 +747,7 @@ with st.sidebar:
         st.session_state.query_history = []
         st.session_state.last_query    = ""
         st.session_state.input_value   = ""
+        st.session_state.pinned        = []
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -741,6 +765,23 @@ with st.sidebar:
         st.markdown(
             "<div style='font-size:12px; color:#737373; padding:6px 0 10px;'>"
             "No recent queries</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Pinned findings
+    st.markdown('<span class="sidebar-section-label">PINNED</span>', unsafe_allow_html=True)
+    if st.session_state.pinned:
+        for pi, pin in enumerate(st.session_state.pinned):
+            pin_label = f"\U0001f4cc {pin[:40]}{'...' if len(pin) > 40 else ''}"
+            st.markdown('<div class="pin-btn">', unsafe_allow_html=True)
+            if st.button(pin_label, key=f"unpin_{pi}", use_container_width=True):
+                st.session_state.pinned.pop(pi)
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(
+            "<div style='font-size:12px; color:#737373; padding:6px 0 10px;'>"
+            "No pinned findings</div>",
             unsafe_allow_html=True,
         )
 
@@ -903,24 +944,33 @@ def render_result_table(rows: list[dict], table_class: str = "result-table") -> 
 # ── Render: mode-specific content ────────────────────────────────────────────
 
 def render_mode_direct(result: dict) -> None:
-    """Direct: small supporting data table, no expander."""
+    """Direct: small supporting data table with trend arrows, no expander."""
     rows = result.get("supporting_data", [])
     if not rows:
         return
 
     cols = list(rows[0].keys())
+    extremes = _compute_col_extremes(rows, cols)
+
     hdr = "".join(
         f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
     )
     body = ""
-    for row in rows:
+    for i, row in enumerate(rows):
         cells = ""
         for c in cols:
             val = row.get(c)
             if val is None:
                 cells += '<td style="color:#555;">\u2014</td>'
             else:
-                cells += f"<td>{_fmt_cell(val)}</td>"
+                display = _fmt_cell(val)
+                arrow = ""
+                if c in extremes:
+                    if i == extremes[c]["max_idx"]:
+                        arrow = ' <span style="color:#10b981;">\u2191</span>'
+                    elif i == extremes[c]["min_idx"]:
+                        arrow = ' <span style="color:#ef4444;">\u2193</span>'
+                cells += f"<td>{display}{arrow}</td>"
         body += f"<tr>{cells}</tr>"
     st.markdown(
         f'<table class="direct-table"><thead><tr>{hdr}</tr></thead>'
@@ -1209,9 +1259,9 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
     else:  # "default"
         render_mode_default(result, is_last)
 
-    # Action row: PDF download + copy + re-run
+    # Action row: PDF download + copy + pin + re-run
     report_text = result.get("report", "")
-    c1, c2, c3, _pad = st.columns([1.2, 1, 1, 6.8])
+    c1, c2, c3, c4, _pad = st.columns([1.2, 1, 0.8, 1, 6])
 
     with c1:
         render_pdf_download(orig_query, result, msg_idx)
@@ -1243,6 +1293,17 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
         st.markdown("</div>", unsafe_allow_html=True)
 
     with c3:
+        if finding:
+            st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
+            if st.button("\U0001f4cc Pin", key=f"pin_{msg_idx}", help="Pin this finding"):
+                pinned = st.session_state.pinned
+                if finding not in pinned:
+                    pinned.insert(0, finding)
+                    st.session_state.pinned = pinned[:10]
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    with c4:
         if orig_query:
             st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
             if st.button("\U0001f504 Re-run", key=f"rerun_{msg_idx}"):

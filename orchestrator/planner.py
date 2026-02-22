@@ -567,9 +567,14 @@ class Planner:
         """Dispatch to the correct mode-specific builder."""
 
         # Generate common fields: finding + follow_up_questions
-        finding = self._generate_finding(
-            user_query, all_rows, agent_results, is_follow_up, prev_topic,
-        )
+        if response_mode == "anomaly":
+            finding = self._generate_anomaly_finding(
+                user_query, agent_results, is_follow_up, prev_topic,
+            )
+        else:
+            finding = self._generate_finding(
+                user_query, all_rows, agent_results, is_follow_up, prev_topic,
+            )
         follow_ups = self._generate_follow_up_questions(user_query, all_rows, response_mode)
 
         base = {
@@ -825,12 +830,72 @@ class Planner:
             f"Agent context: {context_str}\n"
             f"Data: {preview}\n\n"
             "Write 1-2 sentences about what the data shows. "
-            "Friendly-professional tone. Cite the top number or key insight. "
+            "Cite the top number or key insight. "
             "Describe and analyze facts and trends only. "
             "Never suggest business actions, strategies, or recommendations. "
             "Never say 'you should', 'consider', 'invest', 'prioritize', 'replicate'. "
             "Never start with 'I' or 'The data shows'. "
             f"{follow_up_instruction}"
+            "Tone: friendly and professional, like a smart analyst briefing "
+            "a senior manager. Report findings and trends only. "
+            "Never give business recommendations or action items. "
+            "Return only the finding text, no formatting."
+        )
+
+        try:
+            resp = self.client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=150,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return resp.content[0].text.strip() if resp.content else ""
+        except Exception:
+            return ""
+
+    def _generate_anomaly_finding(
+        self,
+        query: str,
+        agent_results: list[dict],
+        is_follow_up: bool,
+        prev_topic: str,
+    ) -> str:
+        """
+        Generate a neutral anomaly finding using Haiku.
+
+        Describes the anomaly with specific numbers and z-scores.
+        No alarm language, no recommendations.
+        """
+        # Collect anomaly data from results
+        anomalies: list[dict] = []
+        for ar in agent_results:
+            anomalies.extend(ar.get("anomalies", []))
+
+        if not anomalies:
+            return "No statistically significant anomalies were detected in the data."
+
+        preview = _rows_preview(anomalies, 6)
+
+        follow_up_instruction = ""
+        if is_follow_up and prev_topic:
+            short_topic = prev_topic[:80]
+            follow_up_instruction = (
+                f'Start with "Based on your previous question about {short_topic}..." '
+            )
+
+        prompt = (
+            f"Question: {query}\n"
+            f"Anomaly data: {preview}\n\n"
+            "Write 1-2 sentences describing the anomaly neutrally with specific numbers "
+            "and z-scores. State what the value is, the mean, and how many standard "
+            "deviations away it falls. "
+            "No alarm language. No recommendations. No causes. "
+            "Example tone: 'Laptops recorded a z-score of 2.79, significantly above "
+            "the subcategory mean of $394K at $1.86M in total profit.' "
+            f"{follow_up_instruction}"
+            "Tone: friendly and professional, like a smart analyst briefing "
+            "a senior manager. Report findings and trends only. "
+            "Never give business recommendations or action items. "
+            "Never start with I or The data shows. "
             "Return only the finding text, no formatting."
         )
 
@@ -858,9 +923,13 @@ class Planner:
             f"User asked: {query}\n"
             f"Response mode: {mode}\n"
             f"Data preview: {preview}\n\n"
-            "Suggest exactly 3 short follow-up questions the user might ask next. "
-            "Each question must be max 10 words, natural language. "
-            "Questions only — no recommendations or action items. "
+            "Generate 3 short follow-up questions (max 10 words each). "
+            "Questions must be about exploring the data further. "
+            "No recommendations. No action items. Only analytical questions. "
+            "Tone: friendly and professional, like a smart analyst briefing "
+            "a senior manager. Report findings and trends only. "
+            "Never give business recommendations or action items. "
+            "Never start with I or The data shows. "
             "Return as a JSON array of 3 strings, no other text."
         )
 
@@ -968,6 +1037,12 @@ class Planner:
         if not rows:
             return ""
         preview = _rows_preview(rows, 12)
+        tone_rule = (
+            "Tone: friendly and professional, like a smart analyst briefing "
+            "a senior manager. Report findings and trends only. "
+            "Never give business recommendations or action items. "
+            "Never start with I or The data shows."
+        )
         try:
             resp = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -975,7 +1050,7 @@ class Planner:
                 messages=[
                     {
                         "role": "user",
-                        "content": f"Query: {query}\nData: {preview}\n\n{instruction}",
+                        "content": f"Query: {query}\nData: {preview}\n\n{instruction}\n{tone_rule}",
                     }
                 ],
             )
