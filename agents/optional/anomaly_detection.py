@@ -265,10 +265,9 @@ ORDER BY ABS(z_score) DESC
             "The z_score column measures how many standard deviations each value "
             "sits from the group mean (positive = above average, negative = below).\n\n"
             f"Anomalies:\n{anomalies_json}\n\n"
-            "Write a concise business interpretation of these findings. "
-            "For each outlier: name it, quantify how extreme it is using the z-score "
-            "and the actual value, and suggest one or two plausible business reasons. "
-            "Conclude with a recommended next step. "
+            "Describe the anomaly neutrally with specific numbers and z-scores. "
+            "Explain what makes it statistically unusual. "
+            "Do not suggest causes or recommend actions. "
             "3–6 sentences total. Plain prose only — no bullet points or headers."
         )
 

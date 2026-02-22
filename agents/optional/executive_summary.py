@@ -214,8 +214,9 @@ class ExecutiveSummaryAgent(BaseAgent):
             "The following OLAP analysis results have been gathered:\n\n"
             f"{data_json}\n\n"
             "Produce a structured executive summary using the tool provided. "
-            "Write for decision-makers: be specific with numbers, concise, "
-            "and always connect findings to business impact."
+            "Write for decision-makers: be specific with numbers and concise. "
+            "Summarize findings and trends only. No recommendations, "
+            "no action items, no strategic advice."
         )
 
         response = self.client.messages.create(

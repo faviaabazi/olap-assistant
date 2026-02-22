@@ -233,8 +233,11 @@ class ReportGeneratorAgent(BaseAgent):
             f"Data:\n{data_json}\n\n"
             "Write a concise executive summary of 3 to 5 sentences. "
             "Focus on the most important trends, standout values, and "
-            "actionable insights. Use specific numbers. "
-            "Do not use bullet points or headers — plain prose only."
+            "key findings. Use specific numbers. "
+            "Do not use bullet points or headers — plain prose only. "
+            "Report findings and trends only. Never suggest "
+            "business actions, recommendations, or strategies. Neutral "
+            "analyst tone."
         )
 
         response = self.client.messages.create(
