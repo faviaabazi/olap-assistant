@@ -8,6 +8,7 @@ Run with:
 from __future__ import annotations
 
 import html
+import io
 import json
 import uuid
 from datetime import datetime
@@ -17,25 +18,29 @@ import plotly.io as pio
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+from fpdf import FPDF
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 API_BASE = "http://localhost:8000"
 
 PROMPT_TEMPLATES = [
-    ("📊", "Chart",      "Show me a chart of revenue by ______"),
-    ("📈", "Growth",     "Show year-over-year growth of ______ by region"),
-    ("🔍", "Drill Down", "Drill down into ______ by country"),
-    ("🏆", "Top 5",      "Top 5 ______ by revenue"),
-    ("⚠️", "Anomalies",  "Detect profit anomalies by ______"),
-    ("📋", "Summary",    "Give me an executive summary of ______"),
+    ("\U0001f4ca", "Chart",      "Show me a chart of revenue by ______"),
+    ("\U0001f4c8", "Growth",     "Show year-over-year growth of ______ by region"),
+    ("\U0001f50d", "Drill Down", "Drill down into ______ by country"),
+    ("\U0001f3c6", "Top 5",      "Top 5 ______ by revenue"),
+    ("\u26a0\ufe0f", "Anomalies",  "Detect profit anomalies by ______"),
+    ("\U0001f4cb", "Summary",    "Give me an executive summary of ______"),
 ]
+
+# Modes that should show the PDF download button
+_PDF_MODES = {"direct", "chart", "comparison", "list", "summary", "report"}
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="OLAP Assistant",
-    page_icon="📊",
+    page_icon="\U0001f4ca",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -278,7 +283,7 @@ div[data-testid="stChatInput"],
 }
 .exec-insights li:last-child { border-bottom: none; }
 .exec-insights li::before {
-    content: "▸"; position: absolute; left: 0; color: #f59e0b; font-size: 11px; top: 7px;
+    content: "\u25b8"; position: absolute; left: 0; color: #f59e0b; font-size: 11px; top: 7px;
 }
 .exec-action-wrap { padding: 0 20px 18px; }
 .exec-action {
@@ -430,55 +435,60 @@ div[data-testid="stChatInput"],
 /* ── KB hint ── */
 .kb-hint { font-size: 11px; color: #737373; text-align: center; padding: 4px 0 8px; }
 
-/* ── Comparison table ── */
-.comparison-table {
+/* ── Finding sentence ── */
+.you-asked {
+    font-size: 12px; color: #737373; font-style: italic;
+    margin-bottom: 6px; line-height: 1.5;
+}
+.finding-box {
+    background: #222222;
+    border-left: 3px solid #f59e0b;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    font-size: 16px;
+    line-height: 1.6;
+    color: #fafafa;
+}
+
+/* ── Styled result table (comparison / list) ── */
+.result-table {
     width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0;
 }
-.comparison-table th {
+.result-table th {
     background: #2a2a2a; color: #f59e0b; padding: 8px 12px; text-align: left;
     border-bottom: 2px solid rgba(245,158,11,0.3);
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
     white-space: nowrap;
 }
-.comparison-table td {
+.result-table td {
     padding: 8px 12px; border-bottom: 1px solid #2a2a2a; color: #fafafa;
     white-space: nowrap;
 }
-.comparison-table tr:last-child td { border-bottom: none; }
-.comparison-table tr:hover td { background: #2a2a2a; }
-.comparison-table td.null-cell { color: #555555; }
-.comparison-takeaway {
+.result-table tr:last-child td { border-bottom: none; }
+.result-table tr:hover td { background: #2a2a2a; }
+.result-table td.null-cell { color: #555555; }
+
+/* ── Muted takeaway text ── */
+.muted-takeaway {
     font-size: 13px; color: #a0a0a0; font-style: italic;
     margin-top: 14px; padding: 8px 14px;
-    border-left: 3px solid #f59e0b40; line-height: 1.65;
+    border-left: 3px solid rgba(245,158,11,0.25); line-height: 1.65;
 }
 
-/* ── Simple table ── */
-.simple-table {
-    width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0;
-}
-.simple-table th {
-    background: #2a2a2a; color: #737373; padding: 8px 12px; text-align: left;
-    border-bottom: 1px solid #333333;
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-    white-space: nowrap;
-}
-.simple-table td {
-    padding: 8px 12px; border-bottom: 1px solid #2a2a2a; color: #fafafa;
-    white-space: nowrap;
-}
-.simple-table tr.top-row td { color: #f59e0b; font-weight: 600; }
-.simple-table tr:last-child td { border-bottom: none; }
-.simple-table tr:hover td { background: #2a2a2a; }
-.simple-summary {
-    font-size: 13px; color: #a0a0a0; margin-top: 10px; line-height: 1.6;
+/* ── Chart analysis ── */
+.chart-analysis {
+    font-size: 14px; color: #a0a0a0; font-style: italic;
+    line-height: 1.65; margin-top: 10px; padding: 8px 0;
 }
 
-/* ── Direct answer ── */
-.direct-answer {
-    font-size: 22px; font-weight: 700; color: #f59e0b;
-    line-height: 1.45; margin: 6px 0 14px;
+/* ── Summary text ── */
+.summary-text {
+    font-size: 16px; color: #fafafa; line-height: 1.6;
+    padding: 8px 0;
 }
+
+/* ── Direct table ── */
 .direct-table {
     width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0 12px;
 }
@@ -493,8 +503,26 @@ div[data-testid="stChatInput"],
     white-space: nowrap; font-size: 12px;
 }
 .direct-table tr:last-child td { border-bottom: none; }
-.direct-brief {
-    font-size: 13px; color: #737373; line-height: 1.55; margin-top: 6px;
+
+/* ── Follow-up suggestions ── */
+.followup-label {
+    font-size: 10px; font-weight: 700; color: #737373;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin: 16px 0 8px; display: block;
+}
+.followup-chip > div > button {
+    background: transparent !important;
+    border: 1px solid rgba(245, 158, 11, 0.4) !important;
+    border-radius: 20px !important;
+    color: #f59e0b !important;
+    font-size: 12px !important;
+    padding: 4px 14px !important;
+    transition: background 0.2s, border-color 0.2s !important;
+    white-space: nowrap !important;
+}
+.followup-chip > div > button:hover {
+    background: rgba(245, 158, 11, 0.1) !important;
+    border-color: #f59e0b !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -514,17 +542,166 @@ def _update_history(query: str) -> None:
     st.session_state.query_history = hist[:5]
 
 
+def _fmt_cell(val) -> str:
+    """Format a table cell value: numbers get thousands separators, None -> em-dash."""
+    if val is None:
+        return None  # caller handles null-cell class
+    try:
+        f = float(val)
+        if f == int(f):
+            return f"{int(f):,}"
+        return f"{f:,.2f}"
+    except (TypeError, ValueError):
+        return html.escape(str(val))
+
+
+def _is_numeric(val) -> bool:
+    """Check if a value is numeric."""
+    if val is None:
+        return False
+    try:
+        float(val)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _compute_col_extremes(rows: list[dict], cols: list[str]) -> dict:
+    """
+    For each numeric column, find the index of the row with the max and min value.
+    Returns {col: {"max_idx": int, "min_idx": int}} for columns with 2+ distinct values.
+    """
+    extremes: dict = {}
+    for c in cols:
+        vals = []
+        for i, row in enumerate(rows):
+            v = row.get(c)
+            if _is_numeric(v):
+                vals.append((i, float(v)))
+        if len(vals) >= 2:
+            max_entry = max(vals, key=lambda x: x[1])
+            min_entry = min(vals, key=lambda x: x[1])
+            if max_entry[1] != min_entry[1]:
+                extremes[c] = {"max_idx": max_entry[0], "min_idx": min_entry[0]}
+    return extremes
+
+
+# ── PDF generation ────────────────────────────────────────────────────────────
+
+def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
+    """Generate a PDF report with query, finding, table data, and footer."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=20)
+
+    # Title
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, "OLAP Assistant Report", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(4)
+
+    # Timestamp
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(130, 130, 130)
+    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    # Query
+    pdf.set_font("Helvetica", "I", 11)
+    pdf.set_text_color(80, 80, 80)
+    safe_query = query.encode("latin-1", "replace").decode("latin-1")
+    pdf.multi_cell(0, 6, f'You asked: "{safe_query}"')
+    pdf.ln(4)
+
+    # Finding
+    if finding:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 8, "Key Finding", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 11)
+        safe_finding = finding.encode("latin-1", "replace").decode("latin-1")
+        pdf.multi_cell(0, 6, safe_finding)
+        pdf.ln(4)
+
+    # Table data
+    rows = (
+        result.get("result_rows")
+        or result.get("supporting_data")
+        or []
+    )
+    if rows:
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 8, "Data", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
+        cols = list(rows[0].keys())
+        n_cols = len(cols)
+        col_w = min(40, int((pdf.w - 20) / max(n_cols, 1)))
+
+        # Header
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(240, 240, 240)
+        for c in cols:
+            label = c.replace("_", " ").title()[:18]
+            safe_label = label.encode("latin-1", "replace").decode("latin-1")
+            pdf.cell(col_w, 7, safe_label, border=1, fill=True)
+        pdf.ln()
+
+        # Rows (max 30 for PDF)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_fill_color(255, 255, 255)
+        for row in rows[:30]:
+            for c in cols:
+                val = row.get(c, "")
+                display = str(val) if val is not None else "-"
+                safe_display = display[:18].encode("latin-1", "replace").decode("latin-1")
+                pdf.cell(col_w, 6, safe_display, border=1)
+            pdf.ln()
+        pdf.ln(4)
+
+    # Chart analysis or summary
+    analysis = result.get("chart_analysis") or result.get("summary_text") or ""
+    if analysis:
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 8, "Analysis", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+        safe_analysis = analysis.encode("latin-1", "replace").decode("latin-1")
+        pdf.multi_cell(0, 5, safe_analysis)
+        pdf.ln(4)
+
+    # Interpretation (anomaly)
+    interp = result.get("interpretation", "")
+    if interp:
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(0, 8, "Interpretation", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+        safe_interp = interp.encode("latin-1", "replace").decode("latin-1")
+        pdf.multi_cell(0, 5, safe_interp)
+        pdf.ln(4)
+
+    # Footer
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(160, 160, 160)
+    pdf.cell(0, 6, "OLAP Assistant", new_x="LMARGIN", new_y="NEXT", align="C")
+
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("""
         <div style='padding:24px 0 12px; text-align:center;'>
-            <div style='font-size:48px; line-height:1;'>📊</div>
+            <div style='font-size:48px; line-height:1;'>\U0001f4ca</div>
             <div style='font-size:20px; font-weight:700; color:#fafafa; margin:10px 0 4px;'>
                 OLAP Assistant
             </div>
             <div style='font-size:11px; color:#737373; letter-spacing:0.08em;'>
-                Retail Sales · 2022–2024
+                Retail Sales \u00b7 2022\u20132024
             </div>
         </div>
         <hr class='sidebar-divider' />
@@ -532,7 +709,7 @@ with st.sidebar:
 
     # New conversation
     st.markdown('<div class="new-convo-btn">', unsafe_allow_html=True)
-    if st.button("⊕  New Conversation", use_container_width=True, key="new_convo"):
+    if st.button("\u2295  New Conversation", use_container_width=True, key="new_convo"):
         try:
             requests.post(
                 f"{API_BASE}/reset",
@@ -554,7 +731,7 @@ with st.sidebar:
     st.markdown('<span class="sidebar-section-label">RECENT</span>', unsafe_allow_html=True)
     if st.session_state.query_history:
         for qi, q in enumerate(st.session_state.query_history):
-            label = f"🕐 {q[:35]}{'...' if len(q) > 35 else ''}"
+            label = f"\U0001f550 {q[:35]}{'...' if len(q) > 35 else ''}"
             st.markdown('<div class="hist-btn">', unsafe_allow_html=True)
             if st.button(label, key=f"hist_{qi}", use_container_width=True):
                 st.session_state.input_value = q
@@ -567,7 +744,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    # Quick action cards — 2-column grid
+    # Quick action cards
     st.markdown('<span class="sidebar-section-label">QUICK ACTIONS</span>', unsafe_allow_html=True)
     for row_start in range(0, len(PROMPT_TEMPLATES), 2):
         pair = PROMPT_TEMPLATES[row_start:row_start + 2]
@@ -606,29 +783,133 @@ def call_query_api(query: str, session_id: str) -> dict:
         return {"status": "error", "message": str(exc)}
 
 
-# ── Render helpers ────────────────────────────────────────────────────────────
+# ── Render: common elements ──────────────────────────────────────────────────
 
-def _fmt_cell(val) -> str:
-    """Format a table cell value: numbers get thousands separators, None → em-dash."""
-    if val is None:
-        return None  # caller handles null-cell class
-    try:
-        f = float(val)
-        if f == int(f):
-            return f"{int(f):,}"
-        return f"{f:,.2f}"
-    except (TypeError, ValueError):
-        return html.escape(str(val))
+def render_you_asked(query: str) -> None:
+    """Show 'You asked: "..."' quote above the finding."""
+    if query:
+        safe = html.escape(query)
+        st.markdown(
+            f'<div class="you-asked">You asked: &ldquo;{safe}&rdquo;</div>',
+            unsafe_allow_html=True,
+        )
 
 
-def render_comparison(result: dict) -> None:
-    """Render a comparison table: highlights % columns in green/red, shows takeaway."""
-    rows = result.get("result_rows", [])
+def render_finding(finding: str) -> None:
+    """Show the finding sentence in styled box."""
+    if finding:
+        safe = html.escape(finding)
+        st.markdown(
+            f'<div class="finding-box">{safe}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_follow_ups(questions: list[str], msg_idx: int) -> None:
+    """Show follow-up suggestion chips."""
+    if not questions:
+        return
+    st.markdown(
+        '<span class="followup-label">You might also ask:</span>',
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(min(len(questions), 3))
+    for i, q in enumerate(questions[:3]):
+        with cols[i]:
+            st.markdown('<div class="followup-chip">', unsafe_allow_html=True)
+            if st.button(q, key=f"fu_{msg_idx}_{i}", use_container_width=True):
+                st.session_state.input_value = q
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_pdf_download(query: str, result: dict, msg_idx: int) -> None:
+    """Show PDF download button for modes with data."""
+    response_mode = result.get("response_mode", "default")
+    if response_mode not in _PDF_MODES:
+        return
+    finding = result.get("finding", "")
+    pdf_bytes = _generate_pdf(query, finding, result)
+    st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
+    st.download_button(
+        "\u2b07 Download as PDF",
+        data=pdf_bytes,
+        file_name="olap_report.pdf",
+        mime="application/pdf",
+        key=f"pdf_{msg_idx}",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Render: result table with trend arrows ───────────────────────────────────
+
+def render_result_table(rows: list[dict], table_class: str = "result-table") -> None:
+    """Render an HTML table with trend arrows on numeric columns."""
     if not rows:
         return
 
     cols = list(rows[0].keys())
-    hdr  = "".join(
+    extremes = _compute_col_extremes(rows, cols)
+
+    hdr = "".join(
+        f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
+    )
+    body = ""
+    for i, row in enumerate(rows):
+        cells = ""
+        for c in cols:
+            val = row.get(c)
+            if val is None:
+                cells += '<td class="null-cell">\u2014</td>'
+                continue
+
+            # Format percentage columns
+            if c.endswith("_pct") and _is_numeric(val):
+                try:
+                    pct = float(val)
+                    color = "#10b981" if pct >= 0 else "#ef4444"
+                    sign = "+" if pct > 0 else ""
+                    cells += (
+                        f'<td style="color:{color}; font-weight:600;">'
+                        f'{sign}{pct:.2f}%</td>'
+                    )
+                    continue
+                except (TypeError, ValueError):
+                    pass
+
+            display = _fmt_cell(val)
+            if display is None:
+                cells += '<td class="null-cell">\u2014</td>'
+                continue
+
+            # Add trend arrows
+            arrow = ""
+            if c in extremes:
+                if i == extremes[c]["max_idx"]:
+                    arrow = ' <span style="color:#10b981;">\u2191</span>'
+                elif i == extremes[c]["min_idx"]:
+                    arrow = ' <span style="color:#ef4444;">\u2193</span>'
+
+            cells += f"<td>{display}{arrow}</td>"
+        body += f"<tr>{cells}</tr>"
+
+    st.markdown(
+        f'<table class="{table_class}"><thead><tr>{hdr}</tr></thead>'
+        f'<tbody>{body}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+
+# ── Render: mode-specific content ────────────────────────────────────────────
+
+def render_mode_direct(result: dict) -> None:
+    """Direct: small supporting data table, no expander."""
+    rows = result.get("supporting_data", [])
+    if not rows:
+        return
+
+    cols = list(rows[0].keys())
+    hdr = "".join(
         f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
     )
     body = ""
@@ -636,158 +917,125 @@ def render_comparison(result: dict) -> None:
         cells = ""
         for c in cols:
             val = row.get(c)
-            if c.endswith("_pct") and val is not None:
-                try:
-                    pct   = float(val)
-                    color = "#10b981" if pct >= 0 else "#ef4444"
-                    sign  = "+" if pct > 0 else ""
-                    cells += (
-                        f'<td style="color:{color}; font-weight:600;">'
-                        f'{sign}{pct:.2f}%</td>'
-                    )
-                except (TypeError, ValueError):
-                    cells += '<td class="null-cell">—</td>'
-            elif val is None:
-                cells += '<td class="null-cell">—</td>'
+            if val is None:
+                cells += '<td style="color:#555;">\u2014</td>'
             else:
-                display = _fmt_cell(val)
-                cells += f"<td>{display}</td>"
+                cells += f"<td>{_fmt_cell(val)}</td>"
         body += f"<tr>{cells}</tr>"
-
     st.markdown(
-        f'<table class="comparison-table"><thead><tr>{hdr}</tr></thead>'
+        f'<table class="direct-table"><thead><tr>{hdr}</tr></thead>'
         f'<tbody>{body}</tbody></table>',
         unsafe_allow_html=True,
     )
+
+
+def render_mode_chart(result: dict) -> None:
+    """Chart: Plotly chart + chart_analysis paragraph."""
+    figure_json = result.get("figure_json")
+    if figure_json:
+        try:
+            fig = pio.from_json(json.dumps(figure_json))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        except Exception:
+            pass
+
+    analysis = result.get("chart_analysis", "")
+    if analysis:
+        st.markdown(
+            f'<div class="chart-analysis">{html.escape(analysis)}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_mode_comparison(result: dict) -> None:
+    """Comparison: result table with trend arrows + takeaway."""
+    rows = result.get("result_rows", [])
+    render_result_table(rows)
 
     takeaway = result.get("comparison_takeaway", "")
     if takeaway:
         st.markdown(
-            f'<div class="comparison-takeaway">{html.escape(takeaway)}</div>',
+            f'<div class="muted-takeaway">{html.escape(takeaway)}</div>',
             unsafe_allow_html=True,
         )
 
 
-def render_simple(result: dict) -> None:
-    """Render a simple ranked/margin table with the top row highlighted in amber."""
+def render_mode_list(result: dict) -> None:
+    """List: result table with trend arrows + list_summary."""
     rows = result.get("result_rows", [])
-    if not rows:
-        return
+    render_result_table(rows)
 
-    cols = list(rows[0].keys())
-    hdr  = "".join(
-        f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
-    )
-    body = ""
-    for i, row in enumerate(rows):
-        row_class = ' class="top-row"' if i == 0 else ""
-        cells = ""
-        for c in cols:
-            val = row.get(c)
-            if val is None:
-                cells += '<td class="null-cell">—</td>'
-            else:
-                display = _fmt_cell(val)
-                cells += f"<td>{display}</td>"
-        body += f"<tr{row_class}>{cells}</tr>"
-
-    st.markdown(
-        f'<table class="simple-table"><thead><tr>{hdr}</tr></thead>'
-        f'<tbody>{body}</tbody></table>',
-        unsafe_allow_html=True,
-    )
-
-    summary = result.get("simple_summary", "")
+    summary = result.get("list_summary", "")
     if summary:
         st.markdown(
-            f'<div class="simple-summary">{html.escape(summary)}</div>',
+            f'<div class="muted-takeaway">{html.escape(summary)}</div>',
             unsafe_allow_html=True,
         )
 
 
-def render_direct(result: dict) -> None:
-    """Render a direct factual answer: large answer, small table, muted brief."""
-    answer = result.get("answer", "")
-    rows   = result.get("supporting_data", [])
-    brief  = result.get("brief", "")
-
-    if answer:
+def render_mode_summary(result: dict) -> None:
+    """Summary: clean readable text."""
+    text = result.get("summary_text", "")
+    if text:
         st.markdown(
-            f'<div class="direct-answer">{html.escape(answer)}</div>',
+            f'<div class="summary-text">{html.escape(text)}</div>',
             unsafe_allow_html=True,
         )
 
+    # Render exec summary card if present
+    render_executive_summary(result)
+
+
+def render_mode_report(result: dict, is_last: bool) -> None:
+    """Report: full monospace expander + optional chart/anomaly/exec."""
+    report_text = result.get("report", "")
+    if report_text:
+        with st.expander("\U0001f4c4  View Full Report", expanded=is_last):
+            safe_r = html.escape(report_text).replace("$", "&#36;")
+            st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
+
+    # Bubble up chart
+    if result.get("figure_json"):
+        try:
+            fig = pio.from_json(json.dumps(result["figure_json"]))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        except Exception:
+            pass
+
+    render_anomaly_table(result)
+    render_executive_summary(result)
+
+
+def render_mode_anomaly(result: dict) -> None:
+    """Anomaly: red-styled anomaly table."""
+    render_anomaly_table(result)
+
+
+def render_mode_default(result: dict, is_last: bool) -> None:
+    """Default: result table if available, otherwise report expander."""
+    rows = result.get("result_rows", [])
     if rows:
-        cols = list(rows[0].keys())
-        hdr  = "".join(
-            f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
-        )
-        body = ""
-        for row in rows:
-            cells = ""
-            for c in cols:
-                val = row.get(c)
-                if val is None:
-                    cells += '<td style="color:#555;">—</td>'
-                else:
-                    cells += f"<td>{_fmt_cell(val)}</td>"
-            body += f"<tr>{cells}</tr>"
-        st.markdown(
-            f'<table class="direct-table"><thead><tr>{hdr}</tr></thead>'
-            f'<tbody>{body}</tbody></table>',
-            unsafe_allow_html=True,
-        )
+        render_result_table(rows)
 
-    if brief:
-        st.markdown(
-            f'<div class="direct-brief">{html.escape(brief)}</div>',
-            unsafe_allow_html=True,
-        )
+    report_text = result.get("report", "")
+    if report_text:
+        with st.expander("\U0001f4c4  View Full Report", expanded=is_last and not rows):
+            safe_r = html.escape(report_text).replace("$", "&#36;")
+            st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
+
+    # Bubble up chart / anomaly / exec
+    if result.get("figure_json"):
+        try:
+            fig = pio.from_json(json.dumps(result["figure_json"]))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        except Exception:
+            pass
+
+    render_anomaly_table(result)
+    render_executive_summary(result)
 
 
-def render_user_bubble(text: str, ts: str = "") -> None:
-    safe = html.escape(text)
-    st.markdown(
-        f'<div class="user-row"><div class="user-bubble">{safe}</div></div>'
-        f'<div class="ts-right">{ts}</div>',
-        unsafe_allow_html=True,
-    )
-
-
-def render_typing_indicator():
-    ph = st.empty()
-    ph.markdown("""
-        <div class="typing-row">
-            <div class="typing-bubble">
-                <span class="typing-label">Analyzing data</span>
-                <div class="typing-dots">
-                    <span></span><span></span><span></span>
-                </div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-    return ph
-
-
-def render_plotly_chart(result: dict) -> None:
-    figure_json = result.get("figure_json")
-    if not figure_json:
-        return
-    try:
-        fig = pio.from_json(json.dumps(figure_json))
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    except Exception:
-        return
-
-    raw = result.get("table") or result.get("rows")
-    if raw:
-        with st.expander("🗂  View Raw Data"):
-            try:
-                df = pd.DataFrame(raw)
-                st.dataframe(df, use_container_width=True)
-            except Exception:
-                st.json(raw)
-
+# ── Render: anomaly + executive summary (shared helpers) ─────────────────────
 
 def render_anomaly_table(result: dict) -> None:
     anomalies = result.get("anomalies")
@@ -810,7 +1058,7 @@ def render_anomaly_table(result: dict) -> None:
     count = result["anomaly_count"]
     st.markdown(
         f'<div class="anomaly-section">'
-        f'<div class="anomaly-header">⚠ {count} anomal{"y" if count == 1 else "ies"} detected</div>'
+        f'<div class="anomaly-header">\u26a0 {count} anomal{"y" if count == 1 else "ies"} detected</div>'
         f'{interp_html}'
         f'<table class="anomaly-table"><thead><tr>{hdr}</tr></thead>'
         f'<tbody>{body}</tbody></table>'
@@ -860,21 +1108,21 @@ def render_executive_summary(result: dict) -> None:
     if risks:
         all_cols  = list(risks[0].keys())
         data_cols = [c for c in all_cols if c != "risk_reason"]
-        cols      = data_cols + (["risk_reason"] if "risk_reason" in all_cols else [])
+        r_cols    = data_cols + (["risk_reason"] if "risk_reason" in all_cols else [])
         hdr = "".join(
-            f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
+            f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in r_cols
         )
         body = ""
         for row in risks:
             cells = ""
-            for c in cols:
+            for c in r_cols:
                 cls = ' class="risk-reason"' if c == "risk_reason" else ""
                 cells += f'<td{cls}>{html.escape(str(row.get(c, "")))}</td>'
             body += f"<tr>{cells}</tr>"
         st.markdown(
             f'<div class="risk-section">'
             f'<div class="risk-header">'
-            f'⚡ {len(risks)} at-risk area{"s" if len(risks) != 1 else ""}'
+            f'\u26a1 {len(risks)} at-risk area{"s" if len(risks) != 1 else ""}'
             f'</div>'
             f'<table class="risk-table"><thead><tr>{hdr}</tr></thead>'
             f'<tbody>{body}</tbody></table>'
@@ -883,85 +1131,95 @@ def render_executive_summary(result: dict) -> None:
         )
 
 
+# ── Render: user bubble ──────────────────────────────────────────────────────
+
+def render_user_bubble(text: str, ts: str = "") -> None:
+    safe = html.escape(text)
+    st.markdown(
+        f'<div class="user-row"><div class="user-bubble">{safe}</div></div>'
+        f'<div class="ts-right">{ts}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_typing_indicator():
+    ph = st.empty()
+    ph.markdown("""
+        <div class="typing-row">
+            <div class="typing-bubble">
+                <span class="typing-label">Analyzing data</span>
+                <div class="typing-dots">
+                    <span></span><span></span><span></span>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    return ph
+
+
+# ── Render: assistant bubble (main dispatcher) ───────────────────────────────
+
 def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str = "") -> None:
     # Error state
     if result.get("status") == "error":
         msg = html.escape(result.get("message", "An unknown error occurred."))
         st.markdown(
-            f'<div class="error-row"><div class="error-bubble">⚠&nbsp;&nbsp;{msg}</div></div>'
+            f'<div class="error-row"><div class="error-bubble">\u26a0&nbsp;&nbsp;{msg}</div></div>'
             f'<div class="ts-left">{ts}</div>',
             unsafe_allow_html=True,
         )
         return
 
-    # Bubble header content
-    response_mode = result.get("response_mode", "report")
-    exec_headline = result.get("exec_headline", "")
-    section_count = result.get("section_count", 0)
-    report_text   = result.get("report", "")
+    response_mode = result.get("response_mode", "default")
+    finding       = result.get("finding", "")
+    follow_ups    = result.get("follow_up_questions", [])
+    orig_query    = result.get("_query", "")
 
-    if exec_headline:
-        excerpt = html.escape(exec_headline[:160]) + ("…" if len(exec_headline) > 160 else "")
-        bubble_body = (
-            f'<span style="font-weight:600; color:#f59e0b; font-size:15px;">'
-            f'{excerpt}</span>'
-        )
-    elif response_mode == "comparison":
-        n = len(result.get("result_rows", []))
-        bubble_body = f'<strong style="color:#fafafa;">📊 {n}-row comparison</strong>'
-    elif response_mode == "direct":
-        short = html.escape((result.get("answer") or "")[:120])
-        bubble_body = (
-            f'<span style="font-weight:600; color:#f59e0b;">{short}</span>'
-        )
-    elif response_mode == "simple":
-        n = len(result.get("result_rows", []))
-        bubble_body = f'<strong style="color:#fafafa;">✓ {n} result{"s" if n != 1 else ""}</strong>'
-    elif response_mode == "chart":
-        bubble_body = '<strong style="color:#fafafa;">📊 Chart ready</strong>'
-    else:
-        s = "sections" if section_count != 1 else "section"
-        bubble_body = f'<strong style="color:#fafafa;">{section_count} {s}</strong>'
+    # Timestamp
+    st.markdown(f'<div class="ts-left">{ts}</div>', unsafe_allow_html=True)
 
-    st.markdown(
-        f'<div class="asst-row"><div class="asst-bubble">{bubble_body}</div></div>'
-        f'<div class="ts-left">{ts}</div>',
-        unsafe_allow_html=True,
-    )
+    # "You asked:" quote
+    render_you_asked(orig_query)
 
-    # Content — dispatch on response mode
+    # Finding sentence (always shown first)
+    render_finding(finding)
+
+    # Mode-specific content
     if response_mode == "direct":
-        render_direct(result)
+        render_mode_direct(result)
 
     elif response_mode == "chart":
-        render_plotly_chart(result)
-
-    elif response_mode == "executive":
-        render_executive_summary(result)
+        render_mode_chart(result)
 
     elif response_mode == "comparison":
-        render_comparison(result)
+        render_mode_comparison(result)
 
-    elif response_mode == "simple":
-        render_simple(result)
+    elif response_mode == "list":
+        render_mode_list(result)
 
-    else:  # "report" — full expander + optional chart / anomaly / exec summary
-        if report_text:
-            with st.expander("📄  View Full Report", expanded=is_last):
-                safe_r = html.escape(report_text).replace("$", "&#36;")
-                st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
-        render_plotly_chart(result)
-        render_anomaly_table(result)
-        render_executive_summary(result)
+    elif response_mode == "summary":
+        render_mode_summary(result)
 
-    # Response action buttons
-    orig_query = result.get("_query", "")
-    c1, c2, c3, _pad = st.columns([1, 1, 1, 7])
+    elif response_mode == "report":
+        render_mode_report(result, is_last)
+
+    elif response_mode == "anomaly":
+        render_mode_anomaly(result)
+
+    else:  # "default"
+        render_mode_default(result, is_last)
+
+    # Action row: PDF download + copy + re-run
+    report_text = result.get("report", "")
+    c1, c2, c3, _pad = st.columns([1.2, 1, 1, 6.8])
 
     with c1:
+        render_pdf_download(orig_query, result, msg_idx)
+
+    with c2:
         st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
-        if st.button("📋 Copy", key=f"copy_{msg_idx}", help="Copy report to clipboard"):
-            text_to_copy = report_text or exec_headline or ""
+        if st.button("\U0001f4cb Copy", key=f"copy_{msg_idx}", help="Copy finding to clipboard"):
+            text_to_copy = finding or report_text or ""
             safe_js = (
                 text_to_copy
                 .replace("\\", "\\\\")
@@ -984,25 +1242,16 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with c2:
-        if report_text:
-            st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
-            st.download_button(
-                "💾 Download",
-                data=report_text,
-                file_name="report.txt",
-                mime="text/plain",
-                key=f"dl_{msg_idx}",
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
     with c3:
         if orig_query:
             st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
-            if st.button("🔄 Re-run", key=f"rerun_{msg_idx}"):
+            if st.button("\U0001f504 Re-run", key=f"rerun_{msg_idx}"):
                 st.session_state.input_value = orig_query
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
+
+    # Follow-up suggestions
+    render_follow_ups(follow_ups, msg_idx)
 
 
 # ── Main chat area ────────────────────────────────────────────────────────────
@@ -1011,17 +1260,17 @@ if not st.session_state.messages:
     st.markdown("""
         <div class="welcome-wrap">
             <div class="welcome-card">
-                <div class="welcome-icon">📊</div>
+                <div class="welcome-icon">\U0001f4ca</div>
                 <div class="welcome-title">OLAP Sales Assistant</div>
                 <div class="welcome-sub">
                     Ask natural-language questions about your retail data
                 </div>
                 <div class="feature-pills">
-                    <span class="feature-pill">📅 2022–2024</span>
-                    <span class="feature-pill">🌍 4 Regions</span>
-                    <span class="feature-pill">📦 4 Categories</span>
+                    <span class="feature-pill">\U0001f4c5 2022\u20132024</span>
+                    <span class="feature-pill">\U0001f30d 4 Regions</span>
+                    <span class="feature-pill">\U0001f4e6 4 Categories</span>
                 </div>
-                <div class="welcome-hint">← Pick a quick action or type below</div>
+                <div class="welcome-hint">\u2190 Pick a quick action or type below</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -1038,8 +1287,7 @@ else:
 
 # ── Input area ────────────────────────────────────────────────────────────────
 
-# If a card or history item was clicked, inject JS to pre-populate the textarea.
-# This does NOT send the query — the user edits the text and presses Enter themselves.
+# If a card, history item, or follow-up was clicked, inject JS to pre-populate.
 if st.session_state.input_value:
     _tpl = (
         st.session_state.input_value
