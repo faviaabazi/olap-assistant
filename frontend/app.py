@@ -128,16 +128,16 @@ div[data-testid="stChatInput"],
 [data-testid="stBaseButton-secondary"] > button,
 .stButton > button {
     background: #111111 !important;
-    border: 1px solid #fafafa !important;
+    border: 1px solid #333333 !important;
     color: #fafafa !important;
     border-radius: 8px !important;
-    transition: background 0.2s, color 0.2s !important;
+    transition: background 0.2s, color 0.2s, border-color 0.2s !important;
 }
 [data-testid="stBaseButton-secondary"] > button:hover,
 .stButton > button:hover {
-    background: #fafafa !important;
-    border-color: #fafafa !important;
-    color: #111111 !important;
+    background: #111111 !important;
+    border-color: #f59e0b !important;
+    color: #f59e0b !important;
 }
 
 /* ── Scrollbars ── */
@@ -369,25 +369,26 @@ div[data-testid="stChatInput"],
 /* ── New conversation button ── */
 .new-convo-btn > div > button {
     background: #111111 !important;
-    border: 1px solid #fafafa !important;
+    border: 1px solid #333333 !important;
     border-radius: 8px !important;
     color: #fafafa !important;
     font-size: 13px !important;
     font-weight: 600 !important;
     padding: 8px 16px !important;
     width: 100% !important;
-    transition: background 0.2s, color 0.2s !important;
+    transition: background 0.2s, color 0.2s, border-color 0.2s !important;
 }
 .new-convo-btn > div > button:hover {
-    background: #fafafa !important;
-    color: #111111 !important;
+    background: #111111 !important;
+    border-color: #f59e0b !important;
+    color: #f59e0b !important;
 }
 
 /* ── Quick action card buttons ── */
 .card-btn > div > button {
     width: 100% !important;
     background: #111111 !important;
-    border: 1px solid #fafafa !important;
+    border: 1px solid #333333 !important;
     border-radius: 10px !important;
     padding: 10px 8px !important;
     color: #fafafa !important;
@@ -397,12 +398,12 @@ div[data-testid="stChatInput"],
     height: auto !important;
     min-height: 52px !important;
     line-height: 1.4 !important;
-    transition: background 0.2s, color 0.2s !important;
+    transition: background 0.2s, color 0.2s, border-color 0.2s !important;
 }
 .card-btn > div > button:hover {
-    background: #fafafa !important;
-    border-color: #fafafa !important;
-    color: #111111 !important;
+    background: #111111 !important;
+    border-color: #f59e0b !important;
+    color: #f59e0b !important;
 }
 
 /* ── History buttons ── */
@@ -412,7 +413,7 @@ div[data-testid="stChatInput"],
     border: none !important;
     border-bottom: 1px solid #2a2a2a !important;
     border-radius: 0 !important;
-    color: #fafafa !important;
+    color: #737373 !important;
     font-size: 12px !important;
     text-align: left !important;
     padding: 6px 4px !important;
@@ -420,46 +421,46 @@ div[data-testid="stChatInput"],
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     max-width: 100% !important;
-    transition: color 0.2s, background 0.2s !important;
+    transition: color 0.2s !important;
 }
 .hist-btn > div > button:hover {
-    color: #111111 !important;
-    background: #fafafa !important;
+    color: #f59e0b !important;
+    background: transparent !important;
 }
 
 /* ── Response action ghost buttons (Copy, Pin, Re-run) ── */
 .action-ghost > div > button {
     background: #111111 !important;
-    border: 1px solid #fafafa !important;
+    border: 1px solid #333333 !important;
     color: #fafafa !important;
     font-size: 12px !important;
     padding: 4px 8px !important;
     border-radius: 6px !important;
-    transition: color 0.2s, background 0.2s !important;
+    transition: color 0.2s, background 0.2s, border-color 0.2s !important;
     min-width: auto !important;
     white-space: nowrap !important;
 }
 .action-ghost > div > button:hover {
-    color: #111111 !important;
-    background: #fafafa !important;
-    border-color: #fafafa !important;
+    color: #f59e0b !important;
+    background: #111111 !important;
+    border-color: #f59e0b !important;
 }
 
 /* ── PDF download button ── */
 .pdf-btn [data-testid="stDownloadButton"] > button {
-    background: #111111 !important;
-    border: 1px solid #fafafa !important;
+    background: #f59e0b !important;
+    border: none !important;
     border-radius: 8px !important;
-    color: #fafafa !important;
+    color: #111111 !important;
     font-size: 12px !important;
     font-weight: 600 !important;
     padding: 8px 16px !important;
     white-space: nowrap !important;
-    transition: background 0.2s, color 0.2s !important;
+    transition: background 0.2s !important;
     min-width: auto !important;
 }
 .pdf-btn [data-testid="stDownloadButton"] > button:hover {
-    background: #fafafa !important;
+    background: #fbbf24 !important;
     color: #111111 !important;
 }
 
@@ -554,18 +555,18 @@ div[data-testid="stChatInput"],
 }
 .followup-chip > div > button {
     background: #111111 !important;
-    border: 1px solid #fafafa !important;
+    border: 1px solid #333333 !important;
     border-radius: 20px !important;
     color: #fafafa !important;
     font-size: 12px !important;
     padding: 4px 14px !important;
-    transition: background 0.2s, color 0.2s !important;
+    transition: background 0.2s, color 0.2s, border-color 0.2s !important;
     white-space: nowrap !important;
 }
 .followup-chip > div > button:hover {
-    background: #fafafa !important;
-    border-color: #fafafa !important;
-    color: #111111 !important;
+    background: #111111 !important;
+    border-color: #f59e0b !important;
+    color: #f59e0b !important;
 }
 
 /* ── Pin buttons ── */
@@ -575,7 +576,7 @@ div[data-testid="stChatInput"],
     border: none !important;
     border-bottom: 1px solid #2a2a2a !important;
     border-radius: 0 !important;
-    color: #fafafa !important;
+    color: #f59e0b !important;
     font-size: 12px !important;
     text-align: left !important;
     padding: 6px 4px !important;
@@ -583,11 +584,11 @@ div[data-testid="stChatInput"],
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     max-width: 100% !important;
-    transition: color 0.2s, background 0.2s !important;
+    transition: color 0.2s !important;
 }
 .pin-btn > div > button:hover {
-    color: #111111 !important;
-    background: #fafafa !important;
+    color: #fbbf24 !important;
+    background: transparent !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -983,6 +984,33 @@ def render_result_table(rows: list[dict], table_class: str = "result-table") -> 
     )
 
 
+def render_sections(sections: list[dict]) -> None:
+    """Render multiple data sections, each with its own title and table."""
+    for sec in sections:
+        title = sec.get("title", "")
+        rows = sec.get("rows", [])
+        explanation = sec.get("explanation", "")
+
+        if title:
+            st.markdown(
+                f'<div style="font-size:13px; font-weight:700; color:#f59e0b; '
+                f'text-transform:uppercase; letter-spacing:0.08em; margin:18px 0 8px;">'
+                f'{html.escape(title)}</div>',
+                unsafe_allow_html=True,
+            )
+
+        if rows:
+            render_result_table(rows)
+
+        if explanation:
+            st.markdown(
+                f'<div style="font-size:13px; color:#a0a0a0; font-style:italic; '
+                f'line-height:1.6; margin:4px 0 14px; padding:0 4px;">'
+                f'{html.escape(explanation)}</div>',
+                unsafe_allow_html=True,
+            )
+
+
 # ── Render: mode-specific content ────────────────────────────────────────────
 
 def render_mode_direct(result: dict) -> None:
@@ -1040,15 +1068,23 @@ def render_mode_chart(result: dict) -> None:
 
 
 def render_mode_comparison(result: dict) -> None:
-    """Comparison: result table with trend arrows."""
-    rows = result.get("result_rows", [])
-    render_result_table(rows)
+    """Comparison: result table(s) with trend arrows."""
+    sections = result.get("sections")
+    if sections:
+        render_sections(sections)
+    else:
+        rows = result.get("result_rows", [])
+        render_result_table(rows)
 
 
 def render_mode_list(result: dict) -> None:
-    """List: result table with trend arrows."""
-    rows = result.get("result_rows", [])
-    render_result_table(rows)
+    """List: result table(s) with trend arrows."""
+    sections = result.get("sections")
+    if sections:
+        render_sections(sections)
+    else:
+        rows = result.get("result_rows", [])
+        render_result_table(rows)
 
 
 def render_mode_summary(result: dict) -> None:
@@ -1090,9 +1126,12 @@ def render_mode_anomaly(result: dict) -> None:
 
 
 def render_mode_default(result: dict, is_last: bool) -> None:
-    """Default: result table if available, otherwise report expander."""
+    """Default: result table(s) if available, otherwise report expander."""
+    sections = result.get("sections")
     rows = result.get("result_rows", [])
-    if rows:
+    if sections:
+        render_sections(sections)
+    elif rows:
         render_result_table(rows)
 
     report_text = result.get("report", "")

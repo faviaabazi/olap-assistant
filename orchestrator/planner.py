@@ -429,10 +429,18 @@ class Planner:
             result["title"] = step.get("title", "")
             agent_results.append(result)
 
-        # 4. Collect all data rows across results
+        # 4. Collect all data rows across results + build sections
         all_rows: list[dict] = []
+        sections: list[dict] = []
         for ar in agent_results:
-            all_rows.extend(_extract_rows(ar))
+            rows = _extract_rows(ar)
+            all_rows.extend(rows)
+            if rows:
+                sections.append({
+                    "title": ar.get("title", ""),
+                    "rows": rows,
+                    "explanation": ar.get("message", ""),
+                })
 
         # 5. Build mode-specific response
         is_follow_up = len(self.conversation_history) > 2  # more than just this turn
@@ -440,7 +448,7 @@ class Planner:
 
         response = self._build_response(
             user_query, agent_results, steps, reasoning,
-            response_mode, all_rows, is_follow_up, prev_topic,
+            response_mode, all_rows, sections, is_follow_up, prev_topic,
         )
 
         # 6. Store finding (not full report) in conversation history
@@ -561,6 +569,7 @@ class Planner:
         reasoning: str,
         response_mode: str,
         all_rows: list[dict],
+        sections: list[dict],
         is_follow_up: bool,
         prev_topic: str,
     ) -> dict:
@@ -598,6 +607,11 @@ class Planner:
 
         builder = builder_map.get(response_mode, self._build_default)
         mode_fields = builder(user_query, agent_results, steps, all_rows)
+
+        # Attach sections for multi-step rendering
+        if len(sections) > 1:
+            mode_fields["sections"] = sections
+
         base.update(mode_fields)
 
         return base
