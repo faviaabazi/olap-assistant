@@ -127,16 +127,17 @@ div[data-testid="stChatInput"],
 /* ── Kill all default Streamlit button white/gray backgrounds ── */
 [data-testid="stBaseButton-secondary"] > button,
 .stButton > button {
-    background: transparent !important;
-    border: 1px solid #f59e0b !important;
-    color: #f59e0b !important;
+    background: #111111 !important;
+    border: 1px solid #fafafa !important;
+    color: #fafafa !important;
     border-radius: 8px !important;
+    transition: background 0.2s, color 0.2s !important;
 }
 [data-testid="stBaseButton-secondary"] > button:hover,
 .stButton > button:hover {
-    background: rgba(245, 158, 11, 0.12) !important;
-    border-color: #fbbf24 !important;
-    color: #fbbf24 !important;
+    background: #fafafa !important;
+    border-color: #fafafa !important;
+    color: #111111 !important;
 }
 
 /* ── Scrollbars ── */
@@ -367,40 +368,41 @@ div[data-testid="stChatInput"],
 
 /* ── New conversation button ── */
 .new-convo-btn > div > button {
-    background: #f59e0b !important;
-    border: none !important;
+    background: #111111 !important;
+    border: 1px solid #fafafa !important;
     border-radius: 8px !important;
-    color: #111111 !important;
+    color: #fafafa !important;
     font-size: 13px !important;
     font-weight: 600 !important;
     padding: 8px 16px !important;
     width: 100% !important;
-    transition: background 0.2s !important;
+    transition: background 0.2s, color 0.2s !important;
 }
 .new-convo-btn > div > button:hover {
-    background: #fbbf24 !important;
+    background: #fafafa !important;
+    color: #111111 !important;
 }
 
 /* ── Quick action card buttons ── */
 .card-btn > div > button {
     width: 100% !important;
-    background: transparent !important;
-    border: 1px solid #f59e0b !important;
+    background: #111111 !important;
+    border: 1px solid #fafafa !important;
     border-radius: 10px !important;
     padding: 10px 8px !important;
-    color: #f59e0b !important;
+    color: #fafafa !important;
     font-size: 12px !important;
     text-align: left !important;
     white-space: normal !important;
     height: auto !important;
     min-height: 52px !important;
     line-height: 1.4 !important;
-    transition: background 0.2s, border-color 0.2s !important;
+    transition: background 0.2s, color 0.2s !important;
 }
 .card-btn > div > button:hover {
-    background: rgba(245, 158, 11, 0.12) !important;
-    border-color: #fbbf24 !important;
-    color: #fbbf24 !important;
+    background: #fafafa !important;
+    border-color: #fafafa !important;
+    color: #111111 !important;
 }
 
 /* ── History buttons ── */
@@ -410,7 +412,7 @@ div[data-testid="stChatInput"],
     border: none !important;
     border-bottom: 1px solid #2a2a2a !important;
     border-radius: 0 !important;
-    color: #737373 !important;
+    color: #fafafa !important;
     font-size: 12px !important;
     text-align: left !important;
     padding: 6px 4px !important;
@@ -418,18 +420,18 @@ div[data-testid="stChatInput"],
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     max-width: 100% !important;
-    transition: color 0.2s !important;
+    transition: color 0.2s, background 0.2s !important;
 }
 .hist-btn > div > button:hover {
-    color: #f59e0b !important;
-    background: transparent !important;
+    color: #111111 !important;
+    background: #fafafa !important;
 }
 
 /* ── Response action ghost buttons (Copy, Pin, Re-run) ── */
 .action-ghost > div > button {
-    background: transparent !important;
-    border: 1px solid #f59e0b !important;
-    color: #f59e0b !important;
+    background: #111111 !important;
+    border: 1px solid #fafafa !important;
+    color: #fafafa !important;
     font-size: 12px !important;
     padding: 4px 8px !important;
     border-radius: 6px !important;
@@ -439,25 +441,26 @@ div[data-testid="stChatInput"],
 }
 .action-ghost > div > button:hover {
     color: #111111 !important;
-    background: #fbbf24 !important;
-    border-color: #fbbf24 !important;
+    background: #fafafa !important;
+    border-color: #fafafa !important;
 }
 
 /* ── PDF download button ── */
 .pdf-btn [data-testid="stDownloadButton"] > button {
-    background: #f59e0b !important;
-    border: none !important;
+    background: #111111 !important;
+    border: 1px solid #fafafa !important;
     border-radius: 8px !important;
-    color: #111111 !important;
+    color: #fafafa !important;
     font-size: 12px !important;
     font-weight: 600 !important;
     padding: 8px 16px !important;
     white-space: nowrap !important;
-    transition: background 0.2s !important;
+    transition: background 0.2s, color 0.2s !important;
     min-width: auto !important;
 }
 .pdf-btn [data-testid="stDownloadButton"] > button:hover {
-    background: #fbbf24 !important;
+    background: #fafafa !important;
+    color: #111111 !important;
 }
 
 /* ── Sidebar helpers ── */
@@ -550,19 +553,19 @@ div[data-testid="stChatInput"],
     margin: 16px 0 8px; display: block;
 }
 .followup-chip > div > button {
-    background: transparent !important;
-    border: 1px solid #f59e0b !important;
+    background: #111111 !important;
+    border: 1px solid #fafafa !important;
     border-radius: 20px !important;
-    color: #f59e0b !important;
+    color: #fafafa !important;
     font-size: 12px !important;
     padding: 4px 14px !important;
-    transition: background 0.2s, border-color 0.2s !important;
+    transition: background 0.2s, color 0.2s !important;
     white-space: nowrap !important;
 }
 .followup-chip > div > button:hover {
-    background: rgba(245, 158, 11, 0.12) !important;
-    border-color: #fbbf24 !important;
-    color: #fbbf24 !important;
+    background: #fafafa !important;
+    border-color: #fafafa !important;
+    color: #111111 !important;
 }
 
 /* ── Pin buttons ── */
@@ -572,7 +575,7 @@ div[data-testid="stChatInput"],
     border: none !important;
     border-bottom: 1px solid #2a2a2a !important;
     border-radius: 0 !important;
-    color: #f59e0b !important;
+    color: #fafafa !important;
     font-size: 12px !important;
     text-align: left !important;
     padding: 6px 4px !important;
@@ -580,11 +583,11 @@ div[data-testid="stChatInput"],
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     max-width: 100% !important;
-    transition: color 0.2s !important;
+    transition: color 0.2s, background 0.2s !important;
 }
 .pin-btn > div > button:hover {
-    color: #fbbf24 !important;
-    background: transparent !important;
+    color: #111111 !important;
+    background: #fafafa !important;
 }
 </style>
 """, unsafe_allow_html=True)
