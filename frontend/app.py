@@ -1292,6 +1292,38 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
     follow_ups    = result.get("follow_up_questions", [])
     orig_query    = result.get("_query", "")
 
+    # Check if all agent results errored — no useful data at all
+    has_rows = bool(
+        result.get("result_rows")
+        or result.get("supporting_data")
+        or result.get("sections")
+        or result.get("figure_json")
+        or result.get("anomalies")
+    )
+    report_text = result.get("report", "")
+    if not has_rows and not finding and report_text:
+        # Likely an error wrapped in a report — show friendly message
+        # Extract the first error reason from the report
+        error_reason = ""
+        for line in report_text.splitlines():
+            stripped = line.strip().strip("─").strip()
+            if stripped and "error" not in stripped.lower() and "status" not in stripped.lower():
+                error_reason = stripped
+                break
+        if not error_reason:
+            error_reason = "The query could not be processed."
+        safe_reason = html.escape(error_reason)
+        st.markdown(
+            f'<div class="ts-left">{ts}</div>'
+            f'<div style="background:#1a1a1a; border:1px solid rgba(245,158,11,0.3); '
+            f'border-left:3px solid #f59e0b; border-radius:8px; padding:14px 18px; '
+            f'margin:14px 15% 12px 0; font-size:14px; color:#a0a0a0; line-height:1.6;">'
+            f'Sorry, I couldn\'t process that query. {safe_reason}</div>',
+            unsafe_allow_html=True,
+        )
+        render_follow_ups(follow_ups, msg_idx)
+        return
+
     # Timestamp
     st.markdown(f'<div class="ts-left">{ts}</div>', unsafe_allow_html=True)
 

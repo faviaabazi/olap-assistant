@@ -55,7 +55,7 @@ _FIELD_MAP: dict[str, tuple[str, str]] = {
 }
 
 # Fields whose values are integers — everything else is treated as a string
-_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "quarter", "month"})
+_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "month"})
 
 # Maps measure name → (source column for inner SELECT, aggregation function)
 _MEASURES: dict[str, tuple[str, str]] = {
