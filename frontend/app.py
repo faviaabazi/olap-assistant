@@ -1351,11 +1351,13 @@ if not st.session_state.messages:
                 <div class="welcome-sub">
                     Ask natural-language questions about your retail data
                 </div>
-
-                <div class="welcome-hint">\u2190 Pick a quick action or type below</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="welcome-hint">\u2190 Pick a quick action or type below</div>',
+        unsafe_allow_html=True,
+    )
 else:
     last_idx = len(st.session_state.messages) - 1
     for i, msg in enumerate(st.session_state.messages):
