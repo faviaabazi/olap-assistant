@@ -7,11 +7,13 @@ Run with:
 
 from __future__ import annotations
 
+import base64
 import html
 import io
 import json
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import plotly.io as pio
@@ -23,6 +25,9 @@ from fpdf import FPDF
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 API_BASE = "http://localhost:8000"
+
+_ICON_PATH = Path(__file__).parent / "logo.png"
+_ICON_B64 = base64.b64encode(_ICON_PATH.read_bytes()).decode() if _ICON_PATH.exists() else ""
 
 PROMPT_TEMPLATES = [
     ("\U0001f4ca", "Chart",      "Show me a chart of revenue by ______"),
@@ -40,7 +45,7 @@ _PDF_MODES = {"direct", "chart", "comparison", "list", "summary", "report"}
 
 st.set_page_config(
     page_title="OLAP Assistant",
-    page_icon="\U0001f4ca",
+    page_icon=str(_ICON_PATH) if _ICON_PATH.exists() else "\U0001f4ca",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -717,9 +722,9 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("""
+    st.markdown(f"""
         <div style='padding:24px 0 12px; text-align:center;'>
-            <div style='font-size:48px; line-height:1;'>\U0001f4ca</div>
+            <img src='data:image/png;base64,{_ICON_B64}' style='width:48px; height:48px;' />
             <div style='font-size:20px; font-weight:700; color:#fafafa; margin:10px 0 4px;'>
                 OLAP Assistant
             </div>
@@ -1318,19 +1323,15 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
 # ── Main chat area ────────────────────────────────────────────────────────────
 
 if not st.session_state.messages:
-    st.markdown("""
+    st.markdown(f"""
         <div class="welcome-wrap">
             <div class="welcome-card">
-                <div class="welcome-icon">\U0001f4ca</div>
+                <div class="welcome-icon"><img src='data:image/png;base64,{_ICON_B64}' style='width:64px; height:64px;' /></div>
                 <div class="welcome-title">OLAP Sales Assistant</div>
                 <div class="welcome-sub">
                     Ask natural-language questions about your retail data
                 </div>
-                <div class="feature-pills">
-                    <span class="feature-pill">\U0001f4c5 2022\u20132024</span>
-                    <span class="feature-pill">\U0001f30d 4 Regions</span>
-                    <span class="feature-pill">\U0001f4e6 4 Categories</span>
-                </div>
+
                 <div class="welcome-hint">\u2190 Pick a quick action or type below</div>
             </div>
         </div>
