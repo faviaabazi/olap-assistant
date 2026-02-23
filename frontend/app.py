@@ -124,6 +124,21 @@ div[data-testid="stChatInput"],
     color: #737373 !important;
 }
 
+/* ── Kill all default Streamlit button white/gray backgrounds ── */
+[data-testid="stBaseButton-secondary"] > button,
+.stButton > button {
+    background: transparent !important;
+    border: 1px solid #f59e0b !important;
+    color: #f59e0b !important;
+    border-radius: 8px !important;
+}
+[data-testid="stBaseButton-secondary"] > button:hover,
+.stButton > button:hover {
+    background: rgba(245, 158, 11, 0.12) !important;
+    border-color: #fbbf24 !important;
+    color: #fbbf24 !important;
+}
+
 /* ── Scrollbars ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -352,10 +367,10 @@ div[data-testid="stChatInput"],
 
 /* ── New conversation button ── */
 .new-convo-btn > div > button {
-    background: transparent !important;
-    border: 1px solid #f59e0b !important;
+    background: #f59e0b !important;
+    border: none !important;
     border-radius: 8px !important;
-    color: #f59e0b !important;
+    color: #111111 !important;
     font-size: 13px !important;
     font-weight: 600 !important;
     padding: 8px 16px !important;
@@ -363,17 +378,17 @@ div[data-testid="stChatInput"],
     transition: background 0.2s !important;
 }
 .new-convo-btn > div > button:hover {
-    background: rgba(245, 158, 11, 0.12) !important;
+    background: #fbbf24 !important;
 }
 
 /* ── Quick action card buttons ── */
 .card-btn > div > button {
     width: 100% !important;
-    background: #222222 !important;
-    border: 1px solid #333333 !important;
+    background: transparent !important;
+    border: 1px solid #f59e0b !important;
     border-radius: 10px !important;
     padding: 10px 8px !important;
-    color: #fafafa !important;
+    color: #f59e0b !important;
     font-size: 12px !important;
     text-align: left !important;
     white-space: normal !important;
@@ -383,8 +398,9 @@ div[data-testid="stChatInput"],
     transition: background 0.2s, border-color 0.2s !important;
 }
 .card-btn > div > button:hover {
-    background: #2a2a2a !important;
-    border-color: #f59e0b !important;
+    background: rgba(245, 158, 11, 0.12) !important;
+    border-color: #fbbf24 !important;
+    color: #fbbf24 !important;
 }
 
 /* ── History buttons ── */
@@ -405,26 +421,43 @@ div[data-testid="stChatInput"],
     transition: color 0.2s !important;
 }
 .hist-btn > div > button:hover {
-    color: #fafafa !important;
+    color: #f59e0b !important;
     background: transparent !important;
 }
 
-/* ── Response action ghost buttons ── */
-.action-ghost > div > button,
-.action-ghost [data-testid="stDownloadButton"] > button {
-    background: none !important;
-    border: none !important;
-    color: #737373 !important;
+/* ── Response action ghost buttons (Copy, Pin, Re-run) ── */
+.action-ghost > div > button {
+    background: transparent !important;
+    border: 1px solid #f59e0b !important;
+    color: #f59e0b !important;
     font-size: 12px !important;
     padding: 4px 8px !important;
     border-radius: 6px !important;
     transition: color 0.2s, background 0.2s !important;
     min-width: auto !important;
+    white-space: nowrap !important;
 }
-.action-ghost > div > button:hover,
-.action-ghost [data-testid="stDownloadButton"] > button:hover {
-    color: #f59e0b !important;
-    background: rgba(245, 158, 11, 0.08) !important;
+.action-ghost > div > button:hover {
+    color: #111111 !important;
+    background: #fbbf24 !important;
+    border-color: #fbbf24 !important;
+}
+
+/* ── PDF download button ── */
+.pdf-btn [data-testid="stDownloadButton"] > button {
+    background: #f59e0b !important;
+    border: none !important;
+    border-radius: 8px !important;
+    color: #111111 !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    padding: 8px 16px !important;
+    white-space: nowrap !important;
+    transition: background 0.2s !important;
+    min-width: auto !important;
+}
+.pdf-btn [data-testid="stDownloadButton"] > button:hover {
+    background: #fbbf24 !important;
 }
 
 /* ── Sidebar helpers ── */
@@ -518,7 +551,7 @@ div[data-testid="stChatInput"],
 }
 .followup-chip > div > button {
     background: transparent !important;
-    border: 1px solid rgba(245, 158, 11, 0.4) !important;
+    border: 1px solid #f59e0b !important;
     border-radius: 20px !important;
     color: #f59e0b !important;
     font-size: 12px !important;
@@ -527,8 +560,9 @@ div[data-testid="stChatInput"],
     white-space: nowrap !important;
 }
 .followup-chip > div > button:hover {
-    background: rgba(245, 158, 11, 0.1) !important;
-    border-color: #f59e0b !important;
+    background: rgba(245, 158, 11, 0.12) !important;
+    border-color: #fbbf24 !important;
+    color: #fbbf24 !important;
 }
 
 /* ── Pin buttons ── */
@@ -549,7 +583,7 @@ div[data-testid="stChatInput"],
     transition: color 0.2s !important;
 }
 .pin-btn > div > button:hover {
-    color: #ef4444 !important;
+    color: #fbbf24 !important;
     background: transparent !important;
 }
 </style>
@@ -876,7 +910,7 @@ def render_pdf_download(query: str, result: dict, msg_idx: int) -> None:
         return
     finding = result.get("finding", "")
     pdf_bytes = _generate_pdf(query, finding, result)
-    st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
+    st.markdown('<div class="pdf-btn">', unsafe_allow_html=True)
     st.download_button(
         "\u2b07 Download as PDF",
         data=pdf_bytes,
@@ -1003,29 +1037,15 @@ def render_mode_chart(result: dict) -> None:
 
 
 def render_mode_comparison(result: dict) -> None:
-    """Comparison: result table with trend arrows + takeaway."""
+    """Comparison: result table with trend arrows."""
     rows = result.get("result_rows", [])
     render_result_table(rows)
-
-    takeaway = result.get("comparison_takeaway", "")
-    if takeaway:
-        st.markdown(
-            f'<div class="muted-takeaway">{html.escape(takeaway)}</div>',
-            unsafe_allow_html=True,
-        )
 
 
 def render_mode_list(result: dict) -> None:
-    """List: result table with trend arrows + list_summary."""
+    """List: result table with trend arrows."""
     rows = result.get("result_rows", [])
     render_result_table(rows)
-
-    summary = result.get("list_summary", "")
-    if summary:
-        st.markdown(
-            f'<div class="muted-takeaway">{html.escape(summary)}</div>',
-            unsafe_allow_html=True,
-        )
 
 
 def render_mode_summary(result: dict) -> None:
@@ -1385,7 +1405,9 @@ if user_input:
     _update_history(user_input)
     ts_now = _ts()
 
+    # Display user bubble immediately before API call
     st.session_state.messages.append({"role": "user", "content": user_input, "ts": ts_now})
+    render_user_bubble(user_input, ts=ts_now)
 
     # Show typing indicator while waiting
     typing_ph = render_typing_indicator()
