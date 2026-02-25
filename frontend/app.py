@@ -790,7 +790,6 @@ with st.sidebar:
         st.session_state.query_history = []
         st.session_state.last_query    = ""
         st.session_state.input_value   = ""
-        st.session_state.pinned        = []
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -815,9 +814,17 @@ with st.sidebar:
     st.markdown('<span class="sidebar-section-label">PINNED</span>', unsafe_allow_html=True)
     if st.session_state.pinned:
         for pi, pin in enumerate(st.session_state.pinned):
-            pin_label = f"\U0001f4cc {pin[:40]}{'...' if len(pin) > 40 else ''}"
+            # Support both dict pins {"question": str, "finding": str} and legacy string pins
+            if isinstance(pin, dict):
+                q_text = pin.get("question", "")
+                f_text = pin.get("finding", "")
+                pin_label = f"\U0001f4cc {q_text[:40]}{'...' if len(q_text) > 40 else ''}"
+                pin_help = f_text[:120] if f_text else None
+            else:
+                pin_label = f"\U0001f4cc {pin[:40]}{'...' if len(pin) > 40 else ''}"
+                pin_help = None
             st.markdown('<div class="pin-btn">', unsafe_allow_html=True)
-            if st.button(pin_label, key=f"unpin_{pi}", use_container_width=True):
+            if st.button(pin_label, key=f"unpin_{pi}", use_container_width=True, help=pin_help):
                 st.session_state.pinned.pop(pi)
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
@@ -1396,8 +1403,13 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
             st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
             if st.button("\U0001f4cc Pin", key=f"pin_{msg_idx}", help="Pin this finding"):
                 pinned = st.session_state.pinned
-                if finding not in pinned:
-                    pinned.insert(0, finding)
+                # Deduplicate by finding text
+                existing_findings = {
+                    (p.get("finding") if isinstance(p, dict) else p)
+                    for p in pinned
+                }
+                if finding not in existing_findings:
+                    pinned.insert(0, {"question": orig_query, "finding": finding})
                     st.session_state.pinned = pinned[:10]
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)

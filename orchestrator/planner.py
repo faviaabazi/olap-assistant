@@ -485,6 +485,9 @@ class Planner:
         # Conversation history: list of {"role": "user"|"assistant", "content": str}
         self.conversation_history: list[dict] = []
 
+        # Result history: retains query + finding + data summary for follow-ups
+        self.result_history: list[dict] = []
+
     # ── public interface ──────────────────────────────────────────────────────
 
     def run(self, user_query: str) -> dict:
@@ -561,6 +564,14 @@ class Planner:
 
         # 6. Store finding (not full report) in conversation history
         finding = response.get("finding", "")
+
+        self.result_history.append({
+            "query": user_query,
+            "finding": finding,
+            "response_mode": response_mode,
+            "rows_summary": _rows_preview(all_rows, 5),
+        })
+
         self.conversation_history.append(
             {"role": "assistant", "content": finding}
         )
@@ -591,6 +602,13 @@ class Planner:
 
         # Add follow-up context to system prompt if we have prior turns
         system = _SYSTEM_PROMPT
+
+        if self.result_history:
+            prior = "\n\n━━━ PRIOR RESULTS (reuse, don't recompute) ━━━\n"
+            for rh in self.result_history[-3:]:
+                prior += f"Q: {rh['query']}\nFinding: {rh['finding']}\nData: {rh['rows_summary']}\n\n"
+            system += prior
+
         prior_user_msgs = [
             m for m in self.conversation_history[:-1] if m["role"] == "user"
         ]
@@ -965,6 +983,7 @@ class Planner:
             "Never suggest business actions, strategies, or recommendations. "
             "Never say 'you should', 'consider', 'invest', 'prioritize', 'replicate'. "
             f"{follow_up_instruction}"
+            "Present results only — no explanatory paragraphs about process, steps, or methodology. "
             "Return only the finding text, no formatting."
         )
 
@@ -1022,6 +1041,7 @@ class Planner:
             "a senior manager. Report findings and trends only. "
             "Never give business recommendations or action items. "
             "Never start with I or The data shows. "
+            "Present results only — no process explanations. "
             "Return only the finding text, no formatting."
         )
 
@@ -1061,6 +1081,7 @@ class Planner:
             "  anomaly   → ask to investigate the outlier, compare to peers, "
             "or see the trend over time\n"
             "Max 10 words each. Only analytical questions — no recommendations or action items. "
+            "Results-focused questions only — never reference process or methodology. "
             "Return as a JSON array of 3 strings, no other text."
         )
 
@@ -1192,3 +1213,4 @@ class Planner:
     def reset(self) -> None:
         """Clear conversation history to start a fresh session."""
         self.conversation_history.clear()
+        self.result_history.clear()
