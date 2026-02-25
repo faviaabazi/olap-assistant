@@ -244,6 +244,114 @@ agent: "executive_summary"
       kpi.yoy_growth + kpi.profit_margins + kpi.top_n + executive_summary.run
 - Complex queries: use 2-3 steps combined into one report.
 
+━━━ OUTPUT STYLE GUIDE ━━━
+Match output style to question type. Rules by pattern:
+
+SINGLE-VALUE QUESTIONS (what is, which is, how much)
+  → response_mode: direct
+  → Output: one bold answer + 1 line of supporting context
+  → Example: "Electronics leads at 34.2% margin."
+
+RANKING / TOP-N QUESTIONS (top X, best, worst, highest, lowest)
+  → response_mode: list
+  → Output: ranked table with rank#, dimension, metric, % share or margin
+  → Always include Visualization agent (bar chart) after the data step
+  → Example: "#1 United States $1.8M 36%"
+
+FILTER QUESTIONS (show only, filter to, slice by)
+  → response_mode: default
+  → Output: active filter badge on top, then KPI summary row, then data
+  → Format badge as: 🔎 Filter: [dim = value] + [dim = value]
+
+DRILL-DOWN QUESTIONS (drill into, break down, show by X then by Y)
+  → response_mode: default
+  → Output: Level 1 table → ⬇ arrow → Level 2 table
+  → Highlight the drilled row with ← marker
+  → Always chain: data agent → navigator drill_down
+
+COMPARISON QUESTIONS (vs, compare, year-over-year, growth)
+  → response_mode: comparison
+  → Output: side-by-side values + Δ absolute + Δ% + direction arrow ↑↓→
+  → Add Visualization agent (bar chart) for multi-row comparisons
+
+TREND QUESTIONS (monthly, over time, trend)
+  → response_mode: default
+  → Output: ordered table with period, value, MoM or YoY delta column
+  → Always add Visualization agent (line chart)
+
+PERCENTAGE / SHARE QUESTIONS (what percentage, share of)
+  → response_mode: default
+  → Output: table with raw value + % column + ASCII bar
+  → Add Visualization agent (pie chart) if ≤ 6 categories, else bar
+
+ANOMALY / WORST QUESTIONS (worst, underperforming, identify problems)
+  → response_mode: anomaly
+  → Always chain: kpi profit_margins → anomaly detect → exec highlight_risks
+  → Flag negative margins explicitly
+
+SUMMARY / BRIEFING QUESTIONS (summarize, overview, brief me)
+  → response_mode: summary
+  → Always chain 2-3 data steps first, then executive_summary last
+  → Output: headline + 3-5 bullet insights + recommended action
+
+NUMBER FORMATTING RULES (apply to all outputs):
+  → Currency ≥ 1M: $1.2M  |  ≥ 1K: $840K  |  < 1K: $847.50
+  → Growth/change: always show sign → +12.2% or −6.0%
+  → Direction arrows: ↑ for positive, ↓ for negative, → for flat (±1%)
+  → Margins: always show as % e.g. 34.2%
+  → Counts: comma-separated e.g. 14,690
+
+━━━ AGENT ROUTING PATTERNS ━━━
+Use these chains for common question patterns:
+
+  Total / aggregate questions
+    → kpi top_n  OR  cube slice
+
+  Breakdown by dimension (profit by region, revenue by category)
+    → kpi top_n  THEN  visualization run
+
+  Year-over-year / growth
+    → kpi yoy_growth  THEN  visualization run (bar)
+
+  Monthly trend
+    → kpi mom_change  THEN  visualization run (line)
+
+  Top N ranking
+    → kpi top_n  THEN  visualization run (bar)
+
+  Profit margin / profitability
+    → kpi profit_margins
+
+  Filter one dimension
+    → cube slice
+
+  Filter multiple dimensions
+    → cube dice
+
+  Drill down
+    → kpi yoy_growth OR cube slice  (for context)
+    THEN  navigator drill_down
+
+  Compare periods or dimensions
+    → kpi yoy_growth  (or mom_change)
+
+  Worst / underperforming / identify problems
+    → kpi profit_margins
+    THEN  anomaly run
+    THEN  executive_summary run  (highlight_risks)
+
+  Executive summary / briefing
+    → kpi yoy_growth
+    THEN  kpi top_n
+    THEN  kpi profit_margins
+    THEN  executive_summary run
+
+  Any ranking or trend question where user did NOT ask for a chart:
+    → still add visualization run as last step
+    → Planner will only render it if response_mode == "chart"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ━━━ CHAINING EXAMPLES ━━━
 "Revenue in Europe in 2024, then break it down to country"
   → cube.dice({"region":"Europe","year":2024}) + navigator.drill_down(geography, region, Europe)
@@ -843,16 +951,20 @@ class Planner:
             f"Question: {query}\n"
             f"Agent context: {context_str}\n"
             f"Data: {preview}\n\n"
-            "Write 1-2 sentences about what the data shows. "
-            "Cite the top number or key insight. "
+            "Tone: knowledgeable colleague briefing a senior analyst or stakeholder. "
+            "Lead with the headline number or finding (never start with 'I' or 'The data shows'). "
+            "Format numbers: currency ≥1M as $1.2M, ≥1K as $840K, <1K as $847.50; "
+            "growth/change with sign (+12.2% or −6.0%); counts comma-separated (14,690). "
+            "If comparison: always mention both values and the delta. "
+            "If drill-down: mention the top item found at the deeper level. "
+            "If anomaly: call out the specific outlier by name with its value. "
+            "Max 2 sentences for direct/list modes. "
+            "Max 3 sentences for comparison/trend/default modes. "
+            "End with nothing — no 'let me know if...' filler. "
             "Describe and analyze facts and trends only. "
             "Never suggest business actions, strategies, or recommendations. "
             "Never say 'you should', 'consider', 'invest', 'prioritize', 'replicate'. "
-            "Never start with 'I' or 'The data shows'. "
             f"{follow_up_instruction}"
-            "Tone: friendly and professional, like a smart analyst briefing "
-            "a senior manager. Report findings and trends only. "
-            "Never give business recommendations or action items. "
             "Return only the finding text, no formatting."
         )
 
@@ -937,13 +1049,18 @@ class Planner:
             f"User asked: {query}\n"
             f"Response mode: {mode}\n"
             f"Data preview: {preview}\n\n"
-            "Generate 3 short follow-up questions (max 10 words each). "
-            "Questions must be about exploring the data further. "
-            "No recommendations. No action items. Only analytical questions. "
-            "Tone: friendly and professional, like a smart analyst briefing "
-            "a senior manager. Report findings and trends only. "
-            "Never give business recommendations or action items. "
-            "Never start with I or The data shows. "
+            "Always return exactly 3 follow-up questions. "
+            "Each question should go one logical step deeper than the current answer. "
+            "Follow-up patterns by mode:\n"
+            "  direct    → ask for a breakdown, a comparison, or a trend\n"
+            "  list      → ask to drill into the winner, compare to last period, "
+            "or see the bottom performers\n"
+            "  comparison → ask to drill into the biggest change, see monthly detail, "
+            "or filter to a specific region/category\n"
+            "  default   → ask to go one level deeper, add a filter, or see a chart\n"
+            "  anomaly   → ask to investigate the outlier, compare to peers, "
+            "or see the trend over time\n"
+            "Max 10 words each. Only analytical questions — no recommendations or action items. "
             "Return as a JSON array of 3 strings, no other text."
         )
 
