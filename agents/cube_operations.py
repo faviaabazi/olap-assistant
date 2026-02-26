@@ -109,7 +109,7 @@ FROM fact_sales f
             "dimension": dimension,
             "value":     value,
             "sql":       sql,
-            "rows":      rows,
+            "result":    rows,
             "message":   (
                 f"Slice on {dimension}={value!r} — "
                 f"revenue={rows[0]['total_revenue']}, "
@@ -164,7 +164,7 @@ FROM fact_sales f
             "operation": "dice",
             "filters":   filters,
             "sql":       sql,
-            "rows":      rows,
+            "result":    rows,
             "message":   (
                 f"Dice on [{filter_s}] — "
                 f"revenue={rows[0]['total_revenue']}, "
@@ -231,7 +231,7 @@ ORDER BY {row_dim}
             "col_dim":   col_dim,
             "measure":   measure,
             "sql":       sql,
-            "rows":      rows,
+            "result":    rows,
             "message":   (
                 f"Pivot of {measure} — rows={row_dim}, cols={col_dim} "
                 f"({col_count} column(s)) — {len(rows)} row(s) returned."

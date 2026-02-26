@@ -50,7 +50,6 @@ Usage
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from typing import Any
 
@@ -215,7 +214,7 @@ ORDER BY ABS(z_score) DESC
             "dimension":     dimension,
             "sensitivity":   sensitivity,
             "sql":           sql,
-            "all_rows":      rows,
+            "result":        rows,
             "normal":        normal,
             "anomalies":     anomalies,
             "anomaly_count": len(anomalies),
@@ -224,65 +223,6 @@ ORDER BY ABS(z_score) DESC
                 f"(sensitivity={sensitivity}, n={len(rows)}). "
                 f"Flagged: {flagged_str}."
             ),
-        }
-
-    def interpret(
-        self,
-        anomalies: list[dict],
-        context: str = "",
-    ) -> dict:
-        """
-        Use Claude to explain *anomalies* in plain business language.
-
-        Parameters
-        ----------
-        anomalies:
-            List of anomalous rows as returned by detect(), each containing
-            the dimension value, metric value, mean, stddev, and z_score.
-        context:
-            Short description of what was analysed, e.g.
-            "revenue by country, sensitivity=2.0".
-
-        Returns
-        -------
-        dict with keys: status, operation, context, interpretation
-        """
-        if not anomalies:
-            return {
-                "status":         "ok",
-                "operation":      "interpret",
-                "context":        context,
-                "interpretation": "No anomalies were detected.",
-            }
-
-        anomalies_json = json.dumps(_safe_json(anomalies), indent=2)
-
-        prompt = (
-            "You are a senior business analyst reviewing statistical anomalies "
-            "in OLAP retail sales data (2022–2024).\n\n"
-            f"Analysis context: {context or 'metric aggregated by dimension'}\n\n"
-            "The following data points were flagged as outliers. "
-            "The z_score column measures how many standard deviations each value "
-            "sits from the group mean (positive = above average, negative = below).\n\n"
-            f"Anomalies:\n{anomalies_json}\n\n"
-            "Describe the anomaly neutrally with specific numbers and z-scores. "
-            "Explain what makes it statistically unusual. "
-            "Do not suggest causes or recommend actions. "
-            "3–6 sentences total. Plain prose only — no bullet points or headers."
-        )
-
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        interpretation = response.content[0].text.strip()
-        return {
-            "status":         "ok",
-            "operation":      "interpret",
-            "context":        context,
-            "interpretation": interpretation,
         }
 
     def run(self, query: dict) -> dict:
@@ -316,31 +256,20 @@ ORDER BY ABS(z_score) DESC
         dimension   = query.get("dimension", "region")
         sensitivity = float(query.get("sensitivity", 2.0))
 
-        # ── detect ─────────────────────────────────────────────────────────
         detection = self.detect(metric, dimension, sensitivity)
         if detection.get("status") == "error":
             return detection
 
-        anomalies = detection["anomalies"]
-
-        # ── interpret ──────────────────────────────────────────────────────
-        context = (
-            f"{metric} by {dimension}, sensitivity={sensitivity}, "
-            f"n={len(detection['all_rows'])} groups"
-        )
-        interp = self.interpret(anomalies, context)
-
         return {
-            "status":         "ok",
-            "operation":      "anomaly_detection",
-            "metric":         metric,
-            "dimension":      dimension,
-            "sensitivity":    sensitivity,
-            "sql":            detection["sql"],
-            "all_rows":       detection["all_rows"],
-            "normal":         detection["normal"],
-            "anomalies":      anomalies,
-            "anomaly_count":  detection["anomaly_count"],
-            "interpretation": interp.get("interpretation", ""),
-            "message":        detection["message"],
+            "status":        "ok",
+            "operation":     "anomaly_detection",
+            "metric":        metric,
+            "dimension":     dimension,
+            "sensitivity":   sensitivity,
+            "sql":           detection["sql"],
+            "result":        detection["result"],
+            "normal":        detection["normal"],
+            "anomalies":     detection["anomalies"],
+            "anomaly_count": detection["anomaly_count"],
+            "message":       detection["message"],
         }

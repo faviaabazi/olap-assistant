@@ -29,16 +29,16 @@ class BaseAgent(ABC):
     # ── public interface ───────────────────────────────────────────────────────
 
     @abstractmethod
-    def run(self, query: str) -> dict:
+    def run(self, query: Any) -> dict:
         """
-        Process a natural-language *query* and return a result dict.
+        Process *query* and return a result dict.
 
         Every concrete agent must implement this method.  The returned dict
-        should at minimum contain:
+        must follow the standard schema:
             {
                 "status":  "ok" | "error",
-                "result":  <agent-specific payload>,
-                "message": <human-readable summary>,
+                "result":  list[dict],   # row dicts — always a list
+                "message": str,          # concise factual summary
             }
         """
 

@@ -56,6 +56,21 @@ from typing import Any
 from agents.base_agent import BaseAgent
 
 
+# ── Shared number formatting rule ──────────────────────────────────────────────
+
+_NUMBER_FORMAT_RULE = (
+    "Number formatting rules — apply to every number in your output:\n"
+    "  Currency ≥ $1M  → $1.2M   (one decimal, M suffix)\n"
+    "  Currency ≥ $1K  → $840K   (one decimal, K suffix)\n"
+    "  Currency < $1K  → $847.50 (two decimals, no suffix)\n"
+    "  Growth/change   → always show sign: +12.2% or −6.0%\n"
+    "  Direction       → ↑ positive  ↓ negative  → flat (±1%)\n"
+    "  Margins         → 34.2% (one decimal, no sign)\n"
+    "  Counts          → comma-separated: 14,690\n"
+    "  NEVER output raw integers like 1522836 or decimals like 0.071\n"
+)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 # Substrings that identify metric columns (checked in order)
@@ -89,7 +104,7 @@ def _to_float(v: Any) -> float | None:
 
 def _extract_rows(result: dict) -> list[dict]:
     """Pull the data rows from any agent result dict."""
-    return result.get("rows") or result.get("all_rows") or []
+    return result.get("result") or result.get("rows") or result.get("all_rows") or []
 
 
 def _detect_metric_col(rows: list[dict], preferred: str = "") -> str:
@@ -207,16 +222,36 @@ class ExecutiveSummaryAgent(BaseAgent):
 
         data_json = json.dumps(condensed, indent=2)
 
+        # Build context string from agent messages
+        context_str = " | ".join(
+            r.get("message", "") for r in ok_results if r.get("message")
+        )
+        ctx_line = (
+            f"Business context: {business_context}\n"
+            if business_context
+            else ""
+        )
+
+        preview = data_json
+
         prompt = (
-            "You are a senior analyst preparing an executive briefing for the "
-            "C-suite of a global retail company (data covers Jan 2022 – Dec 2024).\n\n"
-            f"Business context: {business_context or 'Retail OLAP sales performance analysis'}\n\n"
-            "The following OLAP analysis results have been gathered:\n\n"
-            f"{data_json}\n\n"
-            "Produce a structured executive summary using the tool provided. "
-            "Write for decision-makers: be specific with numbers and concise. "
-            "Summarize findings and trends only. No recommendations, "
-            "no action items, no strategic advice."
+            f"{_NUMBER_FORMAT_RULE}\n"
+            f"{ctx_line}"
+            f"Agent findings already shown to the user: {context_str}\n\n"
+            f"Data:\n{preview}\n\n"
+            "You are adding SUPPLEMENTARY insights below a finding the user "
+            "already read. Rules:\n"
+            "1. Do NOT repeat any number or fact already in the agent findings.\n"
+            "2. Do NOT restate what the finding says — add new angles only.\n"
+            "3. Write exactly 3 bullet points. Each bullet: one sentence, "
+            "   one specific number, max 20 words.\n"
+            "4. Use IDENTICAL number formatting to the finding: "
+            "   $1.2M not $1,200,000 · +12.2% not 12.2 percent · "
+            "   $840K not $840,000.\n"
+            "5. Bullets must reveal something the finding did not say: "
+            "   a comparison, a sub-breakdown, a trend detail, or a risk.\n"
+            "6. No headers, no bold, no italic, no intro sentence.\n"
+            "   Output only the 3 bullet lines starting with •\n"
         )
 
         response = self.client.messages.create(
@@ -404,6 +439,6 @@ class ExecutiveSummaryAgent(BaseAgent):
             "recommended_action": summary["recommended_action"],
             "risks":              at_risk,
             "risk_count":         risk_count,
-            "rows":               [],   # no raw table — content is in structured fields
+            "result":             [],   # no raw table — content is in structured fields
             "message":            summary["headline"],
         }

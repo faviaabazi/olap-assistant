@@ -311,11 +311,49 @@ class VisualizationAgent(BaseAgent):
         if not data:
             return {"status": "error", "message": "No data provided."}
 
+        # ── Pre-process: detect grouping column and override chart type ────
+        label_cols, numeric_cols = _split_columns(data)
+
+        _TIME_COLS = {"year", "month", "month_name", "quarter"}
+        _DIM_COLS = {"category", "subcategory", "region", "country", "customer_segment"}
+
+        # Grouping column = first non-numeric, non-year column
+        grouping_col = ""
+        for lc in label_cols:
+            if lc.lower() not in {"year"}:
+                grouping_col = lc
+                break
+        if not grouping_col and label_cols:
+            grouping_col = label_cols[0]
+
+        # Determine chart type hint based on grouping column
+        chart_type_hint = ""
+        if grouping_col.lower() in _TIME_COLS:
+            chart_type_hint = "line"
+        elif grouping_col.lower() in _DIM_COLS:
+            unique_vals = {str(row.get(grouping_col, "")) for row in data}
+            if len(unique_vals) <= 6 and len(numeric_cols) == 1:
+                chart_type_hint = "pie"
+            else:
+                chart_type_hint = "bar"
+
+        # Enrich context with actual grouping column
+        if grouping_col:
+            context = f"{grouping_col.replace('_', ' ').title()} breakdown — {context}"
+
         rec = self.recommend(data, context)
         if rec.get("status") == "error":
             return rec
 
         chart_type = rec["chart_type"]
+
+        # Override chart type when data structure clearly dictates it
+        if chart_type_hint and chart_type != chart_type_hint:
+            # Trust the data structure over the LLM recommendation
+            if chart_type_hint == "line" and grouping_col.lower() in _TIME_COLS:
+                chart_type = "line"
+            elif chart_type_hint == "pie" and chart_type not in ("pie", "bar"):
+                chart_type = chart_type_hint
         result = self.to_plotly(data, chart_type, title=title)
         if result.get("status") == "error":
             return result
