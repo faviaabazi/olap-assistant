@@ -104,7 +104,7 @@ def _to_float(v: Any) -> float | None:
 
 def _extract_rows(result: dict) -> list[dict]:
     """Pull the data rows from any agent result dict."""
-    return result.get("result") or result.get("rows") or result.get("all_rows") or []
+    return result.get("rows") or result.get("all_rows") or []
 
 
 def _detect_metric_col(rows: list[dict], preferred: str = "") -> str:
@@ -439,6 +439,6 @@ class ExecutiveSummaryAgent(BaseAgent):
             "recommended_action": summary["recommended_action"],
             "risks":              at_risk,
             "risk_count":         risk_count,
-            "result":             [],   # no raw table — content is in structured fields
+            "rows":               [],   # no raw table — content is in structured fields
             "message":            summary["headline"],
         }

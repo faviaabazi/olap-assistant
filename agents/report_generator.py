@@ -67,7 +67,7 @@ class ReportGeneratorAgent(BaseAgent):
         if not data:
             return {
                 "status":  "ok",
-                "result":  [],
+                "rows":    [],
                 "message": f"No data for {title}." if title else "No data.",
             }
 
@@ -89,7 +89,7 @@ class ReportGeneratorAgent(BaseAgent):
             "status":    "ok",
             "operation": "formatted_table",
             "title":     title,
-            "result":    _safe_json(data),
+            "rows":      _safe_json(data),
             "totals":    totals,
             "message":   f"{title} — {len(data)} row(s)." if title else f"{len(data)} row(s).",
         }
@@ -108,7 +108,7 @@ class ReportGeneratorAgent(BaseAgent):
         if not agent_results:
             return {
                 "status":  "error",
-                "result":  [],
+                "rows":    [],
                 "message": "No agent results provided.",
             }
 
@@ -121,11 +121,11 @@ class ReportGeneratorAgent(BaseAgent):
                     "index": idx,
                     "title": "Error",
                     "message": result.get("message", "Unknown error"),
-                    "result": [],
+                    "rows": [],
                 })
                 continue
 
-            rows = result.get("result", [])
+            rows = result.get("rows", [])
             title = result.get("title") or _operation_title(result)
 
             sections.append({
@@ -133,7 +133,7 @@ class ReportGeneratorAgent(BaseAgent):
                 "title": title,
                 "operation": result.get("operation", ""),
                 "message": result.get("message", ""),
-                "result": _safe_json(rows),
+                "rows": _safe_json(rows),
             })
             if isinstance(rows, list):
                 all_rows.extend(rows)
@@ -141,7 +141,7 @@ class ReportGeneratorAgent(BaseAgent):
         return {
             "status":        "ok",
             "operation":     "full_report",
-            "result":        _safe_json(all_rows),
+            "all_rows":      _safe_json(all_rows),
             "sections":      sections,
             "section_count": len(sections),
             "message":       f"Report with {len(sections)} section(s), {len(all_rows)} total row(s).",
@@ -156,7 +156,7 @@ class ReportGeneratorAgent(BaseAgent):
         if not isinstance(query, dict):
             return {
                 "status":  "error",
-                "result":  [],
+                "rows":    [],
                 "message": "run() expects a dict with keys: type, data.",
             }
 
@@ -172,7 +172,7 @@ class ReportGeneratorAgent(BaseAgent):
 
         return {
             "status":  "error",
-            "result":  [],
+            "rows":    [],
             "message": (
                 f"Unknown type '{report_type}'. "
                 "Valid options: 'table', 'report'."

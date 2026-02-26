@@ -121,7 +121,7 @@ class DimensionNavigatorAgent(BaseAgent):
             "from_value": current_value,
             "to_level":   to_level,
             "sql":        sql,
-            "result":     rows,
+            "rows":       rows,
             "message":    (
                 f"Drilled down from {dimension}/{current_level}={current_value} "
                 f"to {to_level} — {len(rows)} row(s) returned."
@@ -184,7 +184,7 @@ class DimensionNavigatorAgent(BaseAgent):
             "from_value": current_value,
             "to_level":   to_level,
             "sql":        sql,
-            "result":     rows,
+            "rows":       rows,
             "message":    (
                 f"Rolled up from {dimension}/{current_level}={current_value} "
                 f"to {to_level} — {len(rows)} row(s) returned."

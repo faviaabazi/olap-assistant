@@ -26,7 +26,7 @@ if str(_ROOT) not in sys.path:
 
 load_dotenv(_ROOT / ".env")
 
-from orchestrator.orchestrator import Orchestrator  # noqa: E402
+from orchestrator.planner import Planner  # noqa: E402
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -47,17 +47,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Session store: one Orchestrator instance per session_id ───────────────────
+# ── Session store: one Planner instance per session_id ────────────────────────
 
 _DB_PATH = str(_ROOT / "olap.duckdb")
-_sessions: dict[str, Orchestrator] = {}
+_sessions: dict[str, Planner] = {}
 
 
-def _get_orchestrator(session_id: str) -> Orchestrator:
-    """Return the existing Orchestrator for *session_id*, creating one if needed."""
+def _get_planner(session_id: str) -> Planner:
+    """Return the existing Planner for *session_id*, creating one if needed."""
     if session_id not in _sessions:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        _sessions[session_id] = Orchestrator(api_key=api_key, db_path=_DB_PATH)
+        _sessions[session_id] = Planner(db_path=_DB_PATH)
     return _sessions[session_id]
 
 
@@ -84,9 +83,9 @@ class ResetRequest(BaseModel):
     tags=["Query"],
 )
 def query(body: QueryRequest) -> dict:
-    orchestrator = _get_orchestrator(body.session_id)
+    planner = _get_planner(body.session_id)
     try:
-        return orchestrator.handle_query(body.query)
+        return planner.run(body.query)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

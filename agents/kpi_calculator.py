@@ -187,7 +187,7 @@ ORDER BY {order_final}
             "metric":    metric,
             "dimension": dimension,
             "sql":       sql,
-            "result":    rows,
+            "rows":      rows,
             "message":   (
                 f"YoY growth for {metric} {label} — "
                 f"{len(rows)} row(s) returned."
@@ -248,7 +248,7 @@ ORDER BY month
             "metric":    metric,
             "year":      year,
             "sql":       sql,
-            "result":    rows,
+            "rows":      rows,
             "message":   (
                 f"MoM change for {metric} in {year} — "
                 f"{len(rows)} month(s) returned."
@@ -332,7 +332,7 @@ LIMIT {int(n)}
             "n":         n,
             "filters":   filters,
             "sql":       sql,
-            "result":    rows,
+            "rows":      rows,
             "message":   (
                 f"Top {n} {dimension}s by {metric}{filter_s} — "
                 f"{len(rows)} row(s) returned."
@@ -373,7 +373,7 @@ ORDER BY profit_margin_pct DESC
             "operation": "profit_margins",
             "dimension": dimension,
             "sql":       sql,
-            "result":    rows,
+            "rows":      rows,
             "message":   (
                 f"Profit margins by {dimension} — {len(rows)} group(s). "
                 + (
