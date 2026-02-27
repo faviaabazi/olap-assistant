@@ -24,7 +24,7 @@ from fpdf import FPDF
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-API_BASE = "https://olap-assistant.onrender.com/"
+API_BASE = "https://olap-assistant-2.onrender.com"
 
 _ICON_PATH = Path(__file__).parent / "logo.png"
 _ICON_B64 = (
@@ -917,7 +917,7 @@ def call_query_api(query: str, session_id: str) -> dict:
         return {
             "status": "error",
             "message": (
-                "Cannot connect to the API server at localhost:8000. "
+                "Cannot connect to the API server at https://olap-assistant-2.onrender.com. "
                 "Start it with:  uvicorn api.main:app --reload"
             ),
         }
