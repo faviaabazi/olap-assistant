@@ -24,7 +24,7 @@ from fpdf import FPDF
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-API_BASE = "http://localhost:8000"
+API_BASE = "https://olap-assistant.onrender.com/"
 
 _ICON_PATH = Path(__file__).parent / "logo.png"
 _ICON_B64 = (
