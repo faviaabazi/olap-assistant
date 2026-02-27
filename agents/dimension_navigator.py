@@ -109,7 +109,7 @@ class DimensionNavigatorAgent(BaseAgent):
             {join}
             WHERE {from_col} = '{current_value}'
             GROUP BY {select_ancestors}
-            ORDER BY {to_col}
+            ORDER BY total_revenue DESC
         """.strip()
 
         rows = self.execute_sql(sql)
@@ -172,7 +172,7 @@ class DimensionNavigatorAgent(BaseAgent):
             {join}
             WHERE {from_col} = '{current_value}'
             GROUP BY {select_parent}
-            ORDER BY {to_col}
+            ORDER BY total_revenue DESC
         """.strip()
 
         rows = self.execute_sql(sql)

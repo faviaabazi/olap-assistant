@@ -3,9 +3,13 @@ CubeOperationsAgent — slice, dice, and pivot the OLAP sales cube.
 
 Operations
 ──────────
-  slice(dimension, value)       — filter one dimension, return aggregate totals
-  dice(filters)                 — filter multiple dimensions simultaneously
-  pivot(row_dim, col_dim, meas) — cross-tabulate two dimensions
+  slice(dimension, value, summarize)  — filter one dimension
+                                         summarize=False (default): individual order rows
+                                         summarize=True: grouped aggregate totals
+  dice(filters, summarize)            — filter multiple dimensions
+                                         summarize=False (default): individual order rows
+                                         summarize=True: grouped aggregate totals
+  pivot(row_dim, col_dim, meas)       — cross-tabulate two dimensions
 
 Supported field names (usable as dimension / row_dim / col_dim)
 ───────────────────────────────────────────────────────────────
@@ -27,9 +31,16 @@ Usage
     con    = duckdb.connect("olap.duckdb")
     agent  = CubeOperationsAgent(client, con)
 
-    result = agent.run("slice by region Europe")
-    result = agent.run("dice year 2024 and category Electronics")
-    result = agent.run("pivot revenue with region as rows and year as columns")
+    # Row-level (default)
+    result = agent.slice("year", 2024)
+    result = agent.dice({"country": "Italy", "year": 2024})
+
+    # Grouped summary (explicit)
+    result = agent.slice("year", 2024, summarize=True)
+    result = agent.dice({"region": "Europe"}, summarize=True)
+
+    # Pivot always aggregates
+    result = agent.pivot("region", "year", "revenue")
 """
 
 from __future__ import annotations
@@ -38,20 +49,34 @@ from typing import Any
 
 from agents.base_agent import BaseAgent
 
-
 # ── Field → SQL mapping ───────────────────────────────────────────────────────
 
 # Maps user-facing field name → (qualified_sql_col, join_clause)
 _FIELD_MAP: dict[str, tuple[str, str]] = {
-    "year":             ("d.year",             "JOIN dim_date      d ON f.date_key      = d.date_key"),
-    "quarter":          ("d.quarter",          "JOIN dim_date      d ON f.date_key      = d.date_key"),
-    "month":            ("d.month",            "JOIN dim_date      d ON f.date_key      = d.date_key"),
-    "month_name":       ("d.month_name",       "JOIN dim_date      d ON f.date_key      = d.date_key"),
-    "region":           ("g.region",           "JOIN dim_geography g ON f.geography_key = g.geography_key"),
-    "country":          ("g.country",          "JOIN dim_geography g ON f.geography_key = g.geography_key"),
-    "category":         ("p.category",         "JOIN dim_product   p ON f.product_key   = p.product_key"),
-    "subcategory":      ("p.subcategory",      "JOIN dim_product   p ON f.product_key   = p.product_key"),
-    "customer_segment": ("c.customer_segment", "JOIN dim_customer  c ON f.customer_key  = c.customer_key"),
+    "year": ("d.year", "JOIN dim_date      d ON f.date_key      = d.date_key"),
+    "quarter": ("d.quarter", "JOIN dim_date      d ON f.date_key      = d.date_key"),
+    "month": ("d.month", "JOIN dim_date      d ON f.date_key      = d.date_key"),
+    "month_name": (
+        "d.month_name",
+        "JOIN dim_date      d ON f.date_key      = d.date_key",
+    ),
+    "region": ("g.region", "JOIN dim_geography g ON f.geography_key = g.geography_key"),
+    "country": (
+        "g.country",
+        "JOIN dim_geography g ON f.geography_key = g.geography_key",
+    ),
+    "category": (
+        "p.category",
+        "JOIN dim_product   p ON f.product_key   = p.product_key",
+    ),
+    "subcategory": (
+        "p.subcategory",
+        "JOIN dim_product   p ON f.product_key   = p.product_key",
+    ),
+    "customer_segment": (
+        "c.customer_segment",
+        "JOIN dim_customer  c ON f.customer_key  = c.customer_key",
+    ),
 }
 
 # Fields whose values are integers — everything else is treated as a string
@@ -59,123 +84,112 @@ _NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "month", "quarter"})
 
 # Maps measure name → (source column for inner SELECT, aggregation function)
 _MEASURES: dict[str, tuple[str, str]] = {
-    "revenue":       ("f.revenue",       "SUM"),
-    "profit":        ("f.profit",        "SUM"),
-    "cost":          ("f.cost",          "SUM"),
-    "quantity":      ("f.quantity",      "SUM"),
+    "revenue": ("f.revenue", "SUM"),
+    "profit": ("f.profit", "SUM"),
+    "cost": ("f.cost", "SUM"),
+    "quantity": ("f.quantity", "SUM"),
     "profit_margin": ("f.profit_margin", "AVG"),
-    "order_count":   ("f.order_id",      "COUNT"),
+    "order_count": ("f.order_id", "COUNT"),
 }
 
-_VALID_FIELDS   = sorted(_FIELD_MAP)
+_VALID_FIELDS = sorted(_FIELD_MAP)
 _VALID_MEASURES = sorted(_MEASURES)
+
+# When slicing on a dimension and summarize=True, show breakdown by this secondary dimension
+_SECONDARY_DIM: dict[str, str] = {
+    "year": "category",
+    "quarter": "category",
+    "month": "category",
+    "month_name": "category",
+    "region": "category",
+    "country": "category",
+    "category": "region",
+    "subcategory": "region",
+    "customer_segment": "category",
+}
+
+# All joins required to hydrate every dimension field on order rows
+_ALL_DIMENSION_JOINS = (
+    "JOIN dim_date      d ON f.date_key      = d.date_key\n"
+    "JOIN dim_geography g ON f.geography_key = g.geography_key\n"
+    "JOIN dim_product   p ON f.product_key   = p.product_key\n"
+    "JOIN dim_customer  c ON f.customer_key  = c.customer_key"
+)
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
+
 
 class CubeOperationsAgent(BaseAgent):
     """Handles slice, dice, and pivot operations on the OLAP sales cube."""
 
     # ── public cube operations ────────────────────────────────────────────────
 
-    def slice(self, dimension: str, value: Any) -> dict:
+    def slice(self, dimension: str, value: Any, summarize: bool = False) -> dict:
         """
-        Filter on a single *dimension* = *value* and return aggregate totals.
+        Filter on a single *dimension* = *value*.
 
-        Example: slice("region", "Europe")
-                 → revenue/profit/quantity totals for European orders.
+        Parameters
+        ----------
+        dimension:
+            Field to filter on (e.g. "year", "region", "category").
+        value:
+            The value to filter by (e.g. 2024, "Europe", "Electronics").
+        summarize:
+            False (default) — return individual order rows with all fields.
+            True            — return grouped aggregate totals by secondary dimension.
+
+        Examples
+        --------
+        slice("year", 2024)               → all orders placed in 2024
+        slice("year", 2024, summarize=True) → per-category totals for 2024
         """
         self._validate_field(dimension)
-        col, join = _FIELD_MAP[dimension]
-        where     = f"WHERE {col} = {self._quote(dimension, value)}"
 
-        sql = f"""
-SELECT
-    SUM(f.revenue)      AS total_revenue,
-    SUM(f.profit)       AS total_profit,
-    SUM(f.cost)         AS total_cost,
-    SUM(f.quantity)     AS total_quantity,
-    COUNT(f.order_id)   AS order_count,
-    ROUND(AVG(f.profit_margin), 4) AS avg_profit_margin
-FROM fact_sales f
-{join}
-{where}
-        """.strip()
+        if summarize:
+            return self._slice_summary(dimension, value)
+        return self._list_orders({dimension: value})
 
-        rows = self.execute_sql(sql)
-        return {
-            "status":    "ok",
-            "operation": "slice",
-            "dimension": dimension,
-            "value":     value,
-            "sql":       sql,
-            "rows":      rows,
-            "message":   (
-                f"Slice on {dimension}={value!r} — "
-                f"revenue={rows[0]['total_revenue']}, "
-                f"profit={rows[0]['total_profit']}, "
-                f"quantity={rows[0]['total_quantity']}."
-            ),
-        }
-
-    def dice(self, filters: dict[str, Any]) -> dict:
+    def dice(self, filters: dict[str, Any], summarize: bool = False) -> dict:
+        print(f"DEBUG DICE CALLED: filters={filters} summarize={summarize}", flush=True)
         """
-        Filter on multiple dimensions simultaneously and return aggregate totals.
-
-        Example: dice({"year": 2024, "region": "Europe"})
-                 → totals for European orders placed in 2024.
+        Filter on multiple dimensions simultaneously.
 
         Parameters
         ----------
         filters:
-            Mapping of field name → value, e.g. {"year": 2024, "category": "Electronics"}.
+            Mapping of field name → value,
+            e.g. {"year": 2024, "country": "Italy"}.
+        summarize:
+            False (default) — return individual order rows with all fields.
+            True            — return grouped aggregate totals.
+
+        Examples
+        --------
+        dice({"country": "Italy", "year": 2024})
+            → all orders from Italy in 2024
+
+        dice({"region": "Europe"}, summarize=True)
+            → per-category revenue/profit totals for Europe
         """
         if not filters:
-            return {"status": "error", "message": "dice() requires at least one filter."}
+            return {
+                "status": "error",
+                "message": "dice() requires at least one filter.",
+            }
 
         for field in filters:
             self._validate_field(field)
 
-        # Collect unique JOINs (preserving insertion order)
-        joins       = self._collect_joins(filters.keys())
-        conditions  = [
-            f"{_FIELD_MAP[field][0]} = {self._quote(field, val)}"
-            for field, val in filters.items()
-        ]
-        where = "WHERE " + "\n  AND ".join(conditions)
-
-        sql = f"""
-SELECT
-    SUM(f.revenue)      AS total_revenue,
-    SUM(f.profit)       AS total_profit,
-    SUM(f.cost)         AS total_cost,
-    SUM(f.quantity)     AS total_quantity,
-    COUNT(f.order_id)   AS order_count,
-    ROUND(AVG(f.profit_margin), 4) AS avg_profit_margin
-FROM fact_sales f
-{joins}
-{where}
-        """.strip()
-
-        rows     = self.execute_sql(sql)
-        filter_s = ", ".join(f"{k}={v!r}" for k, v in filters.items())
-        return {
-            "status":    "ok",
-            "operation": "dice",
-            "filters":   filters,
-            "sql":       sql,
-            "rows":      rows,
-            "message":   (
-                f"Dice on [{filter_s}] — "
-                f"revenue={rows[0]['total_revenue']}, "
-                f"profit={rows[0]['total_profit']}, "
-                f"quantity={rows[0]['total_quantity']}."
-            ),
-        }
+        if summarize:
+            return self._dice_summary(filters)
+        return self._list_orders(filters)
 
     def pivot(self, row_dim: str, col_dim: str, measure: str) -> dict:
         """
         Cross-tabulate *row_dim* vs *col_dim*, aggregating *measure*.
+
+        Always returns aggregated data — there is no row-level mode for pivot.
 
         Example: pivot("region", "year", "revenue")
                  → table with one row per region, one column per year,
@@ -195,11 +209,14 @@ FROM fact_sales f
         self._validate_measure(measure)
 
         if row_dim == col_dim:
-            return {"status": "error", "message": "row_dim and col_dim must be different fields."}
+            return {
+                "status": "error",
+                "message": "row_dim and col_dim must be different fields.",
+            }
 
-        row_col, row_join = _FIELD_MAP[row_dim]
-        col_col, col_join = _FIELD_MAP[col_dim]
-        fact_col, agg_fn  = _MEASURES[measure]
+        row_col, _ = _FIELD_MAP[row_dim]
+        col_col, _ = _FIELD_MAP[col_dim]
+        fact_col, agg_fn = _MEASURES[measure]
 
         joins = self._collect_joins([row_dim, col_dim])
 
@@ -222,17 +239,16 @@ ORDER BY {row_dim}
         """.strip()
 
         rows = self.execute_sql(sql)
-        # The number of pivot columns = total cols minus the row_dim column
         col_count = (len(rows[0]) - 1) if rows else 0
         return {
-            "status":    "ok",
+            "status": "ok",
             "operation": "pivot",
-            "row_dim":   row_dim,
-            "col_dim":   col_dim,
-            "measure":   measure,
-            "sql":       sql,
-            "rows":      rows,
-            "message":   (
+            "row_dim": row_dim,
+            "col_dim": col_dim,
+            "measure": measure,
+            "sql": sql,
+            "rows": rows,
+            "message": (
                 f"Pivot of {measure} — rows={row_dim}, cols={col_dim} "
                 f"({col_count} column(s)) — {len(rows)} row(s) returned."
             ),
@@ -249,10 +265,12 @@ ORDER BY {row_dim}
             {
                 "name": "slice",
                 "description": (
-                    "Filter the sales cube on a single dimension value and return "
-                    "aggregate totals (revenue, profit, cost, quantity, order_count). "
-                    "Use when the user mentions filtering by one field, "
-                    "e.g. 'slice by region Europe' or 'show me data for Electronics'."
+                    "Filter the sales cube on a single dimension value. "
+                    "By default returns individual order rows (one per transaction). "
+                    "Pass summarize=true ONLY when the user explicitly asks for totals, "
+                    "a breakdown, or a summary — e.g. 'show me a 2024 summary by category'. "
+                    "Use for queries like 'list 2024 orders', 'show Electronics orders', "
+                    "'filter by region Europe'."
                 ),
                 "input_schema": {
                     "type": "object",
@@ -265,6 +283,15 @@ ORDER BY {row_dim}
                         "value": {
                             "description": "The value to filter by (e.g. 'Europe', 2024, 'Electronics').",
                         },
+                        "summarize": {
+                            "type": "boolean",
+                            "description": (
+                                "False (default): return individual order rows. "
+                                "True: return grouped aggregate totals by secondary dimension. "
+                                "Only set to true when user explicitly asks for totals/summary/breakdown."
+                            ),
+                            "default": False,
+                        },
                     },
                     "required": ["dimension", "value"],
                 },
@@ -272,10 +299,12 @@ ORDER BY {row_dim}
             {
                 "name": "dice",
                 "description": (
-                    "Filter the sales cube on multiple dimension values simultaneously "
-                    "and return aggregate totals. Use when the user specifies more than "
-                    "one filter, e.g. 'dice year 2024 and region Europe' or "
-                    "'sales for Electronics in North America in 2023'."
+                    "Filter the sales cube on multiple dimension values simultaneously. "
+                    "By default returns individual order rows (one per transaction). "
+                    "Pass summarize=true ONLY when the user explicitly asks for totals, "
+                    "a breakdown, or a summary — e.g. 'revenue breakdown for Italy in 2024'. "
+                    "Use for queries like 'filter orders by Italy and 2024', "
+                    "'list Electronics orders in North America'."
                 ),
                 "input_schema": {
                     "type": "object",
@@ -285,8 +314,17 @@ ORDER BY {row_dim}
                             "description": (
                                 "Map of field name to filter value. "
                                 f"Valid keys: {_VALID_FIELDS}. "
-                                "Example: {\"year\": 2024, \"region\": \"Europe\"}."
+                                'Example: {"year": 2024, "country": "Italy"}.'
                             ),
+                        },
+                        "summarize": {
+                            "type": "boolean",
+                            "description": (
+                                "False (default): return individual order rows. "
+                                "True: return grouped aggregate totals. "
+                                "Only set to true when user explicitly asks for totals/summary/breakdown."
+                            ),
+                            "default": False,
                         },
                     },
                     "required": ["filters"],
@@ -296,6 +334,7 @@ ORDER BY {row_dim}
                 "name": "pivot",
                 "description": (
                     "Cross-tabulate two dimensions and aggregate a measure. "
+                    "Always returns aggregated data. "
                     "Use when the user asks for a pivot table or cross-tab, "
                     "e.g. 'pivot revenue by region and year' or "
                     "'show profit with category as rows and quarter as columns'."
@@ -328,6 +367,9 @@ ORDER BY {row_dim}
             "You are an OLAP cube assistant. "
             "Given a natural-language query, call exactly one of the three tools: "
             "slice (one filter), dice (multiple filters), or pivot (cross-tabulation). "
+            "For slice and dice, only pass summarize=true when the user explicitly "
+            "asks for totals, a breakdown, or a summary. "
+            "Default behaviour is to return individual order rows. "
             "Never respond in plain text — always use a tool."
         )
 
@@ -352,9 +394,16 @@ ORDER BY {row_dim}
 
         args = tool_use.input
         if tool_use.name == "slice":
-            return self.slice(dimension=args["dimension"], value=args["value"])
+            return self.slice(
+                dimension=args["dimension"],
+                value=args["value"],
+                summarize=args.get("summarize", False),
+            )
         if tool_use.name == "dice":
-            return self.dice(filters=args["filters"])
+            return self.dice(
+                filters=args["filters"],
+                summarize=args.get("summarize", False),
+            )
         if tool_use.name == "pivot":
             return self.pivot(
                 row_dim=args["row_dim"],
@@ -364,13 +413,197 @@ ORDER BY {row_dim}
 
         return {"status": "error", "message": f"Unknown tool: {tool_use.name}"}
 
+    # ── private row-level query ───────────────────────────────────────────────
+
+    def _list_orders(self, filters: dict[str, Any]) -> dict:
+        """
+        Return individual order rows matching *filters*.
+
+        All dimension and measure fields are included — no aggregation.
+        One row per transaction, ordered by date descending.
+        """
+        conditions = [
+            f"{_FIELD_MAP[field][0]} = {self._quote(field, val)}"
+            for field, val in filters.items()
+        ]
+        where = ("WHERE " + "\n  AND ".join(conditions)) if conditions else ""
+
+        sql = f"""
+SELECT
+    f.order_id,
+    d.order_date,
+    d.year,
+    d.quarter,
+    d.month_name,
+    g.region,
+    g.country,
+    p.category,
+    p.subcategory,
+    c.customer_segment,
+    f.quantity,
+    f.unit_price,
+    f.revenue,
+    f.cost,
+    f.profit,
+    ROUND(f.profit_margin, 4) AS profit_margin
+FROM fact_sales f
+JOIN dim_date      d ON f.date_key      = d.date_key
+JOIN dim_geography g ON f.geography_key = g.geography_key
+JOIN dim_product   p ON f.product_key   = p.product_key
+JOIN dim_customer  c ON f.customer_key  = c.customer_key
+{where}
+ORDER BY d.order_date DESC
+        """.strip()
+
+        rows = self.execute_sql(sql)
+        filter_s = (
+            ", ".join(f"{k}={v!r}" for k, v in filters.items()) if filters else "none"
+        )
+        operation = "slice" if len(filters) == 1 else "dice"
+        return {
+            "status": "ok",
+            "operation": operation,
+            "filters": filters,
+            "sql": sql,
+            "rows": rows,
+            "message": (
+                f"Orders matching [{filter_s}] — "
+                f"{len(rows)} order(s) returned, sorted by date descending."
+            ),
+        }
+
+    # ── private summary queries ───────────────────────────────────────────────
+
+    def _slice_summary(self, dimension: str, value: Any) -> dict:
+        """
+        Grouped aggregate breakdown for a single-dimension filter.
+        Groups by a secondary dimension (e.g. slicing on year → per-category totals).
+        """
+        col, _ = _FIELD_MAP[dimension]
+        where = f"WHERE {col} = {self._quote(dimension, value)}"
+
+        sec_field = _SECONDARY_DIM.get(dimension, "category")
+        sec_col, _ = _FIELD_MAP[sec_field]
+        joins = self._collect_joins([dimension, sec_field])
+
+        sql = f"""
+SELECT
+    {sec_col} AS {sec_field},
+    SUM(f.revenue)                  AS total_revenue,
+    SUM(f.profit)                   AS total_profit,
+    SUM(f.cost)                     AS total_cost,
+    SUM(f.quantity)                 AS total_quantity,
+    COUNT(f.order_id)               AS order_count,
+    ROUND(AVG(f.profit_margin), 4)  AS avg_profit_margin
+FROM fact_sales f
+{joins}
+{where}
+GROUP BY {sec_col}
+ORDER BY total_revenue DESC
+        """.strip()
+
+        rows = self.execute_sql(sql)
+        return {
+            "status": "ok",
+            "operation": "slice",
+            "dimension": dimension,
+            "value": value,
+            "sql": sql,
+            "rows": rows,
+            "message": (
+                f"Slice summary on {dimension}={value!r} — "
+                f"{len(rows)} {sec_field}(s) returned, sorted by revenue."
+            ),
+        }
+
+    def _dice_summary(self, filters: dict[str, Any]) -> dict:
+        """
+        Grouped aggregate breakdown for multi-dimension filters.
+        Auto-selects a grouping column not present in the filters.
+        """
+        used_fields = set(filters.keys())
+
+        group_field = ""
+        # First pass: prefer non-temporal, non-filter dimension
+        for candidate in (
+            "category",
+            "region",
+            "subcategory",
+            "country",
+            "customer_segment",
+        ):
+            if candidate not in used_fields:
+                group_field = candidate
+                break
+        # Second pass: any unused dimension
+        if not group_field:
+            for candidate in _FIELD_MAP:
+                if candidate not in used_fields:
+                    group_field = candidate
+                    break
+
+        all_fields = list(filters.keys())
+        if group_field:
+            all_fields.append(group_field)
+
+        joins = self._collect_joins(all_fields)
+        conditions = [
+            f"{_FIELD_MAP[field][0]} = {self._quote(field, val)}"
+            for field, val in filters.items()
+        ]
+        where = "WHERE " + "\n  AND ".join(conditions)
+
+        if group_field:
+            group_col = _FIELD_MAP[group_field][0]
+            sql = f"""
+SELECT
+    {group_col} AS {group_field},
+    SUM(f.revenue)                  AS total_revenue,
+    SUM(f.profit)                   AS total_profit,
+    SUM(f.cost)                     AS total_cost,
+    SUM(f.quantity)                 AS total_quantity,
+    COUNT(f.order_id)               AS order_count,
+    ROUND(AVG(f.profit_margin), 4)  AS avg_profit_margin
+FROM fact_sales f
+{joins}
+{where}
+GROUP BY {group_col}
+ORDER BY total_revenue DESC
+            """.strip()
+        else:
+            sql = f"""
+SELECT
+    SUM(f.revenue)                  AS total_revenue,
+    SUM(f.profit)                   AS total_profit,
+    SUM(f.cost)                     AS total_cost,
+    SUM(f.quantity)                 AS total_quantity,
+    COUNT(f.order_id)               AS order_count,
+    ROUND(AVG(f.profit_margin), 4)  AS avg_profit_margin
+FROM fact_sales f
+{joins}
+{where}
+            """.strip()
+
+        rows = self.execute_sql(sql)
+        filter_s = ", ".join(f"{k}={v!r}" for k, v in filters.items())
+        group_msg = f", grouped by {group_field}" if group_field else ""
+        return {
+            "status": "ok",
+            "operation": "dice",
+            "filters": filters,
+            "sql": sql,
+            "rows": rows,
+            "message": (
+                f"Dice summary on [{filter_s}]{group_msg} — "
+                f"{len(rows)} row(s) returned, sorted by revenue."
+            ),
+        }
+
     # ── private helpers ───────────────────────────────────────────────────────
 
     def _validate_field(self, field: str) -> None:
         if field not in _FIELD_MAP:
-            raise ValueError(
-                f"Unknown field '{field}'. Valid fields: {_VALID_FIELDS}"
-            )
+            raise ValueError(f"Unknown field '{field}'. Valid fields: {_VALID_FIELDS}")
 
     def _validate_measure(self, measure: str) -> None:
         if measure not in _MEASURES:
@@ -391,8 +624,7 @@ ORDER BY {row_dim}
         except ValueError:
             pass
         raise ValueError(
-            f"Invalid quarter value '{value}'. "
-            "Expected 1-4, Q1-Q4, or 'quarter 1-4'."
+            f"Invalid quarter value '{value}'. Expected 1-4, Q1-Q4, or 'quarter 1-4'."
         )
 
     def _quote(self, field: str, value: Any) -> str:
@@ -406,7 +638,7 @@ ORDER BY {row_dim}
 
     def _collect_joins(self, fields: Any) -> str:
         """Return deduplicated JOIN clauses for the given *fields*, preserving order."""
-        seen:   set[str]  = set()
+        seen: set[str] = set()
         result: list[str] = []
         for field in fields:
             _, join = _FIELD_MAP[field]

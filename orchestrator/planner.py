@@ -87,7 +87,7 @@ _DIRECT_PREFIXES = (
 )
 
 _LIST_PATTERNS = re.compile(
-    r"\b(top\s+\d+|bottom\s+\d+|ranking|ranked|list\s+of|best\s+\d+|worst\s+\d+)\b",
+    r"\b(top\s+\d+|bottom\s+\d+|ranking|filter|filter by|show|list|ranked|list\s+of|best\s+\d+|worst\s+\d+)\b",
     re.IGNORECASE,
 )
 
@@ -132,7 +132,8 @@ def _detect_response_mode(query: str, steps: list[dict]) -> str:
     if (
         any(q.startswith(p) for p in _DIRECT_PREFIXES)
         and len(steps) == 1
-        and steps[0].get("agent") not in {"visualization", "executive_summary", "anomaly"}
+        and steps[0].get("agent")
+        not in {"visualization", "executive_summary", "anomaly"}
     ):
         return "direct"
 
@@ -147,23 +148,35 @@ Your only job is to call the `create_execution_plan` tool with an ordered list o
 agent steps that answers the user's question.  Never reply in plain text.
 
 ━━━ DATA MODEL ━━━
-Dimensions / field names (use these exact strings):
-  Time      : year, quarter, month, month_name
-              quarter values are integers: 1 | 2 | 3 | 4
-              (NOT "Q1"/"Q2" — always pass the integer)
+
+── Dimension Fields ──────────────────────────────────────────────────────────
+  Time      : year, quarter, month, month_name, order_date
+                quarter values are integers: 1 | 2 | 3 | 4
+                (NOT "Q1"/"Q2" — always pass the integer)
+
   Geography : region, country
+
   Product   : category, subcategory
+
   Customer  : customer_segment
 
-Sample values:
-  region   : North America | Europe | Asia Pacific | Latin America
-  country  : United States | Canada | Mexico | Germany | United Kingdom |
-             France | Italy | Spain | Netherlands | China | Japan |
-             Australia | India | South Korea | Singapore |
-             Brazil | Argentina | Colombia | Chile | Peru
-  category : Electronics | Furniture | Office Supplies | Clothing
+── Fact / Measure Fields ─────────────────────────────────────────────────────
+  Measures  : quantity, unit_price, revenue, cost, profit, profit_margin
+                profit_margin is a decimal ratio (e.g. 0.3542 = 35.42%)
 
-━━━ AVAILABLE AGENTS & METHODS ━━━
+── Sample Values ─────────────────────────────────────────────────────────────
+  region    : North America | Europe | Asia Pacific | Latin America
+
+  country   : United States | Canada | Mexico | Germany | United Kingdom |
+              France | Italy | Spain | Netherlands | China | Japan |
+              Australia | India | South Korea | Singapore |
+              Brazil | Argentina | Colombia | Chile | Peru
+
+  category  : Electronics | Furniture | Office Supplies | Clothing
+
+── Surrogate / Join Keys (internal use only — do not filter or group by) ─────
+  date_key, geography_key, product_key, customer_key, order_id
+  ━━━ AVAILABLE AGENTS & METHODS ━━━
 
 agent: "navigator"
   drill_down(dimension, current_level, current_value)
@@ -233,8 +246,10 @@ agent: "executive_summary"
 ━━━ ROUTING RULES ━━━
 - "drill down / go deeper / more detail"  → navigator.drill_down
 - "roll up / less detail / summarise"     → navigator.roll_up
-- "filter by one value"                   → cube.slice
-- "filter by multiple values"             → cube.dice
+- "filter by one value" / "list orders by X" / "show orders where X"  → cube.slice
+- "filter by multiple values" / "list orders by X and Y"               → cube.dice
+- "list all orders" / "show me orders" / "orders in [year/country/etc]" → cube.slice or cube.dice
+  Always return individual order rows — never aggregate for slice/dice.
 - "pivot / cross-tab / matrix"            → cube.pivot
 - "year over year / YoY / annual growth"  → kpi.yoy_growth
 - "month over month / MoM / monthly"      → kpi.mom_change
@@ -244,11 +259,40 @@ agent: "executive_summary"
 - "chart / plot / graph / visualize / show me visually" → prior data step + visualization.run
 - "executive summary / narrative / report overview / summarize / briefing" →
       kpi.yoy_growth + kpi.profit_margins + kpi.top_n + executive_summary.run
+- "show totals then drill into X" / "totals + breakdown" → always 2 steps:
+      cube.slice or cube.dice first, then navigator.drill_down second
 - Complex queries: use 2-3 steps combined into one report.
+
+━━━ SINGLE-STEP FILTER RULE ━━━
+When the user asks to filter / slice / dice the data (cube.slice or cube.dice),
+that MUST be a single-step plan.  NEVER combine slice or dice with yoy_growth,
+top_n, mom_change, or any other kpi method in the same plan.
+
+DEFAULT behaviour for slice and dice is to return individual order rows
+(one row per transaction). Pass summarize=false (or omit it) for this.
+
+Only pass summarize=true when the user EXPLICITLY asks for a summary,
+totals, breakdown, or grouped view — e.g.:
+  "give me a summary of 2024 orders"
+  "show totals by category for Europe"
+  "what's the revenue breakdown for Italy?"
+
+Examples:
+  "list 2024 orders"                         → cube.slice(year, 2024)                          ← row-level
+  "filter orders by Italy and 2024"          → cube.dice({"country":"Italy","year":2024})       ← row-level
+  "show all Electronics orders"              → cube.slice(category, Electronics)                ← row-level
+  "give me a 2024 summary by category"       → cube.slice(year, 2024, summarize=true)           ← grouped
+  "revenue breakdown for Europe"             → cube.dice({"region":"Europe"}, summarize=true)   ← grouped
 
 ━━━ CHAINING EXAMPLES ━━━
 "Revenue in Europe in 2024, then break it down to country"
   → cube.dice({"region":"Europe","year":2024}) + navigator.drill_down(geography, region, Europe)
+
+"Show category totals, then drill into Electronics"
+  → kpi.top_n(category, revenue, 10, {}) + navigator.drill_down(product, category, Electronics)
+
+"Show 2024 revenue, then break down Asia Pacific by country"
+  → cube.slice(year, 2024) + navigator.drill_down(geography, region, "Asia Pacific")
 
 "Top products in Asia Pacific with quarterly breakdown"
   → kpi.top_n(subcategory, revenue, 5, {"region":"Asia Pacific"})
@@ -321,6 +365,7 @@ _PLAN_TOOL = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _extract_rows(result: dict) -> list[dict]:
     """Pull data rows from any agent result dict."""
     return result.get("rows") or result.get("all_rows") or []
@@ -351,17 +396,18 @@ class Planner:
     # How many past messages to include as context for follow-up classification
     _HISTORY_WINDOW = 6  # 3 turns (user + assistant per turn)
 
-    def __init__(self, db_path: str | None = None) -> None:
-        # Load API key from .env
+    def __init__(self, api_key: str | None = None, db_path: str | None = None) -> None:
+        # Load API key from .env (api_key param accepted for compatibility but ignored —
+        # always read from environment so the key is never stored in plain args)
         load_dotenv(_ROOT / ".env")
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
+        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not resolved_key:
             raise EnvironmentError(
                 "ANTHROPIC_API_KEY not found.  "
                 "Copy .env.example to .env and set your key."
             )
 
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=resolved_key)
 
         # Connect to DuckDB
         resolved_db = db_path or str(_ROOT / "olap.duckdb")
@@ -382,6 +428,10 @@ class Planner:
     # ── public interface ──────────────────────────────────────────────────────
 
     def run(self, user_query: str) -> dict:
+        import sys
+
+        with open("debug.log", "a") as f:
+            f.write(f"DEBUG RUN CALLED: {user_query}\n")
         """
         Process *user_query*, route to the correct agent(s), chain if needed,
         and return a structured response dict.
@@ -395,6 +445,10 @@ class Planner:
         # 2. Classify intent → execution plan
         try:
             steps, reasoning = self._classify(user_query)
+            with open("debug.log", "a") as f:
+                import json
+
+                f.write(f"PLAN: {json.dumps(steps, indent=2)}\n")
             response_mode = _detect_response_mode(user_query, steps)
         except Exception as exc:
             error = {
@@ -438,18 +492,24 @@ class Planner:
 
         # 5. Build mode-specific response
         is_follow_up = len(self.conversation_history) > 2  # more than just this turn
-        prev_topic = _last_user_topic(self.conversation_history[:-1]) if is_follow_up else ""
+        prev_topic = (
+            _last_user_topic(self.conversation_history[:-1]) if is_follow_up else ""
+        )
 
         response = self._build_response(
-            user_query, agent_results, steps, reasoning,
-            response_mode, all_rows, is_follow_up, prev_topic,
+            user_query,
+            agent_results,
+            steps,
+            reasoning,
+            response_mode,
+            all_rows,
+            is_follow_up,
+            prev_topic,
         )
 
         # 6. Store finding (not full report) in conversation history
         finding = response.get("finding", "")
-        self.conversation_history.append(
-            {"role": "assistant", "content": finding}
-        )
+        self.conversation_history.append({"role": "assistant", "content": finding})
 
         return response
 
@@ -472,7 +532,7 @@ class Planner:
         Returns (steps, reasoning).
         """
         # Build message list: recent history + current query already appended
-        window = self.conversation_history[-self._HISTORY_WINDOW:]
+        window = self.conversation_history[-self._HISTORY_WINDOW :]
         messages = window if window else [{"role": "user", "content": user_query}]
 
         # Add follow-up context to system prompt if we have prior turns
@@ -571,13 +631,22 @@ class Planner:
         # Generate common fields: finding + follow_up_questions
         if response_mode == "anomaly":
             finding = self._generate_anomaly_finding(
-                user_query, agent_results, is_follow_up, prev_topic,
+                user_query,
+                agent_results,
+                is_follow_up,
+                prev_topic,
             )
         else:
             finding = self._generate_finding(
-                user_query, all_rows, agent_results, is_follow_up, prev_topic,
+                user_query,
+                all_rows,
+                agent_results,
+                is_follow_up,
+                prev_topic,
             )
-        follow_ups = self._generate_follow_up_questions(user_query, all_rows, response_mode)
+        follow_ups = self._generate_follow_up_questions(
+            user_query, all_rows, response_mode
+        )
 
         base = {
             "status": "ok",
@@ -600,21 +669,45 @@ class Planner:
 
         builder = builder_map.get(response_mode, self._build_default)
         mode_fields = builder(user_query, agent_results, steps, all_rows)
+
+        # BUG 4 fix: when multiple steps produce rows, build separate sections
+        # so the frontend renders each step's data independently (no duplicates).
+        results_with_rows = [ar for ar in agent_results if _extract_rows(ar)]
+        if len(results_with_rows) > 1:
+            sections = []
+            for ar in agent_results:
+                rows = _extract_rows(ar)
+                if rows:
+                    sections.append(
+                        {
+                            "title": ar.get("title", ar.get("operation", "")),
+                            "rows": rows,
+                        }
+                    )
+            mode_fields["sections"] = sections
+            mode_fields.pop("result_rows", None)
+
         base.update(mode_fields)
 
         return base
 
     def _build_direct(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """Direct mode: supporting_data (max 5 rows)."""
         rows = all_rows[:5]
         return {"supporting_data": rows}
 
     def _build_chart(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """Chart mode: figure_json + chart_analysis."""
         result: dict = {}
@@ -631,14 +724,18 @@ class Planner:
         return result
 
     def _build_comparison(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """Comparison mode: result_rows + comparison_takeaway."""
         result: dict = {"result_rows": all_rows}
 
         result["comparison_takeaway"] = self._generate_short_text(
-            query, all_rows,
+            query,
+            all_rows,
             "Write 1-2 sentences summarising the key comparison insight. "
             "Mention the biggest change or difference with specific numbers. "
             "Facts only — no recommendations. Be concise.",
@@ -656,14 +753,18 @@ class Planner:
         return result
 
     def _build_list(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """List mode: result_rows + list_summary."""
         result: dict = {"result_rows": all_rows}
 
         result["list_summary"] = self._generate_short_text(
-            query, all_rows,
+            query,
+            all_rows,
             "Write exactly 1 sentence summarising the top result. "
             "Include the top item name and a specific number. "
             "Facts only — no recommendations. Be concise.",
@@ -681,15 +782,21 @@ class Planner:
         return result
 
     def _build_summary(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """Summary mode: summary_text (short or long based on 'detailed')."""
         is_detailed = "detailed" in query.lower()
         result: dict = {}
 
         result["summary_text"] = self._generate_summary_text(
-            query, all_rows, agent_results, is_detailed,
+            query,
+            all_rows,
+            agent_results,
+            is_detailed,
         )
 
         # Bubble up exec summary fields if present
@@ -704,8 +811,11 @@ class Planner:
         return result
 
     def _build_report(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """Report mode: full report text."""
         _NO_TABLE_OPS = {"visualization", "executive_summary"}
@@ -728,7 +838,10 @@ class Planner:
                 result["anomalies"] = ar["anomalies"]
                 result["anomaly_count"] = ar["anomaly_count"]
                 result["interpretation"] = ar.get("interpretation", "")
-            if ar.get("operation") == "executive_summary" and "exec_headline" not in result:
+            if (
+                ar.get("operation") == "executive_summary"
+                and "exec_headline" not in result
+            ):
                 result["exec_headline"] = ar.get("headline", "")
                 result["exec_insights"] = ar.get("insights", [])
                 result["exec_action"] = ar.get("recommended_action", "")
@@ -737,8 +850,11 @@ class Planner:
         return result
 
     def _build_anomaly(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """Anomaly mode: anomalies + interpretation."""
         result: dict = {}
@@ -757,8 +873,11 @@ class Planner:
         return result
 
     def _build_default(
-        self, query: str, agent_results: list[dict],
-        steps: list[dict], all_rows: list[dict],
+        self,
+        query: str,
+        agent_results: list[dict],
+        steps: list[dict],
+        all_rows: list[dict],
     ) -> dict:
         """Default mode: result_rows or report."""
         _NO_TABLE_OPS = {"visualization", "executive_summary"}
@@ -782,7 +901,10 @@ class Planner:
                 result["anomalies"] = ar["anomalies"]
                 result["anomaly_count"] = ar["anomaly_count"]
                 result["interpretation"] = ar.get("interpretation", "")
-            if ar.get("operation") == "executive_summary" and "exec_headline" not in result:
+            if (
+                ar.get("operation") == "executive_summary"
+                and "exec_headline" not in result
+            ):
                 result["exec_headline"] = ar.get("headline", "")
                 result["exec_insights"] = ar.get("insights", [])
                 result["exec_action"] = ar.get("recommended_action", "")
@@ -804,7 +926,7 @@ class Planner:
         Generate a 1-2 sentence finding using Haiku.
 
         Friendly-professional tone, cites key numbers.
-        If follow-up, starts with "Based on your previous question about [topic]..."
+        If follow-up, starts with something similar to "Based on your previous question about [topic]..."
         Never suggests actions or recommendations.
         Never starts with "I" or "The data shows".
         """
@@ -813,8 +935,7 @@ class Planner:
 
         # Gather context from agent messages
         agent_messages = [
-            ar.get("message", "") for ar in agent_results
-            if ar.get("message")
+            ar.get("message", "") for ar in agent_results if ar.get("message")
         ]
 
         preview = _rows_preview(rows, 10) if rows else "[]"
@@ -831,7 +952,7 @@ class Planner:
             f"Question: {query}\n"
             f"Agent context: {context_str}\n"
             f"Data: {preview}\n\n"
-            "Write 1-2 sentences about what the data shows. "
+            "Write 2-3 sentences about what the data is and shows. "
             "Cite the top number or key insight. "
             "Describe and analyze facts and trends only. "
             "Never suggest business actions, strategies, or recommendations. "
@@ -880,9 +1001,7 @@ class Planner:
         follow_up_instruction = ""
         if is_follow_up and prev_topic:
             short_topic = prev_topic[:80]
-            follow_up_instruction = (
-                f'Start with "Based on your previous question about {short_topic}..." '
-            )
+            follow_up_instruction = f'Start with "Based on your previous question about {short_topic}..." or something similar to it'
 
         prompt = (
             f"Question: {query}\n"
@@ -912,7 +1031,10 @@ class Planner:
             return ""
 
     def _generate_follow_up_questions(
-        self, query: str, rows: list[dict], mode: str,
+        self,
+        query: str,
+        rows: list[dict],
+        mode: str,
     ) -> list[str]:
         """
         Generate 3 suggested follow-up questions using Haiku.
@@ -981,8 +1103,11 @@ class Planner:
             return ""
 
     def _generate_summary_text(
-        self, query: str, rows: list[dict],
-        agent_results: list[dict], is_detailed: bool,
+        self,
+        query: str,
+        rows: list[dict],
+        agent_results: list[dict],
+        is_detailed: bool,
     ) -> str:
         """
         Generate summary text using Sonnet.
@@ -1016,7 +1141,7 @@ class Planner:
             f"Data: {preview}\n\n"
             f"{instruction} "
             "Summarize findings and trends only. "
-            "No recommendations, no action items, no strategic advice. "
+            "No recommendations, no action items, no strategic advice, only if asked."
             "Plain prose only."
         )
 
@@ -1031,7 +1156,10 @@ class Planner:
             return ""
 
     def _generate_short_text(
-        self, query: str, rows: list[dict], instruction: str,
+        self,
+        query: str,
+        rows: list[dict],
+        instruction: str,
     ) -> str:
         """
         Generate short text (list_summary, comparison_takeaway) using Haiku.
