@@ -27,15 +27,17 @@ from fpdf import FPDF
 API_BASE = "http://localhost:8000"
 
 _ICON_PATH = Path(__file__).parent / "logo.png"
-_ICON_B64 = base64.b64encode(_ICON_PATH.read_bytes()).decode() if _ICON_PATH.exists() else ""
+_ICON_B64 = (
+    base64.b64encode(_ICON_PATH.read_bytes()).decode() if _ICON_PATH.exists() else ""
+)
 
 PROMPT_TEMPLATES = [
-    ("\U0001f4ca", "Chart",      "Show me a chart of revenue by ______"),
-    ("\U0001f4c8", "Growth",     "Show year-over-year growth of ______ by region"),
+    ("\U0001f4ca", "Chart", "Show me a chart of revenue by ______"),
+    ("\U0001f4c8", "Growth", "Show year-over-year growth of ______ by region"),
     ("\U0001f50d", "Drill Down", "Drill down into ______ by country"),
-    ("\U0001f3c6", "Top 5",      "Top 5 ______ by revenue"),
-    ("\u26a0\ufe0f", "Anomalies",  "Detect profit anomalies by ______"),
-    ("\U0001f4cb", "Summary",    "Give me an executive summary of ______"),
+    ("\U0001f3c6", "Top 5", "Top 5 ______ by revenue"),
+    ("\u26a0\ufe0f", "Anomalies", "Detect profit anomalies by ______"),
+    ("\U0001f4cb", "Summary", "Give me an executive summary of ______"),
 ]
 
 # Modes that should show the PDF download button
@@ -53,13 +55,13 @@ st.set_page_config(
 # ── Session state ─────────────────────────────────────────────────────────────
 
 _DEFAULTS: dict = {
-    "messages":      [],
-    "session_id":    str(uuid.uuid4()),
-    "show_welcome":  True,
+    "messages": [],
+    "session_id": str(uuid.uuid4()),
+    "show_welcome": True,
     "query_history": [],
-    "input_value":   "",
-    "last_query":    "",
-    "pinned":        [],
+    "input_value": "",
+    "last_query": "",
+    "pinned": [],
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -67,7 +69,8 @@ for _k, _v in _DEFAULTS.items():
 
 # ── Global CSS ────────────────────────────────────────────────────────────────
 
-st.markdown("""
+st.markdown(
+    """
 <style>
 /* ── Streamlit chrome ── */
 #MainMenu, footer, header { visibility: hidden; }
@@ -124,17 +127,27 @@ div[data-testid="stChatInput"],
     color: #737373 !important;
 }
 
-/* ── Kill all default Streamlit button white/gray backgrounds ── */
+/* ── ALL buttons: black bg, white text, amber on hover ── */
+button,
 [data-testid="stBaseButton-secondary"] > button,
-.stButton > button {
+[data-testid="stBaseButton-primary"] > button,
+[data-testid="stDownloadButton"] > button,
+.stButton > button,
+.stDownloadButton > button {
     background: #111111 !important;
     border: 1px solid #333333 !important;
-    color: #fafafa !important;
     border-radius: 8px !important;
+    color: #fafafa !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
     transition: background 0.2s, color 0.2s, border-color 0.2s !important;
 }
+button:hover,
 [data-testid="stBaseButton-secondary"] > button:hover,
-.stButton > button:hover {
+[data-testid="stBaseButton-primary"] > button:hover,
+[data-testid="stDownloadButton"] > button:hover,
+.stButton > button:hover,
+.stDownloadButton > button:hover {
     background: #111111 !important;
     border-color: #f59e0b !important;
     color: #f59e0b !important;
@@ -428,7 +441,7 @@ div[data-testid="stChatInput"],
     background: transparent !important;
 }
 
-/* ── Response action ghost buttons (Copy, Pin, Re-run) ── */
+/* ── Response action ghost buttons (Copy, Pin) ── */
 .action-ghost > div > button {
     background: #111111 !important;
     border: 1px solid #333333 !important;
@@ -446,22 +459,42 @@ div[data-testid="stChatInput"],
     border-color: #f59e0b !important;
 }
 
-/* ── PDF download button ── */
+/* ── PDF download button (in action row) ── */
 .pdf-btn [data-testid="stDownloadButton"] > button {
-    background: #f59e0b !important;
-    border: none !important;
-    border-radius: 8px !important;
-    color: #111111 !important;
+    background: #111111 !important;
+    border: 1px solid #333333 !important;
+    border-radius: 6px !important;
+    color: #fafafa !important;
     font-size: 12px !important;
-    font-weight: 600 !important;
-    padding: 8px 16px !important;
+    font-weight: 500 !important;
+    padding: 4px 8px !important;
     white-space: nowrap !important;
-    transition: background 0.2s !important;
+    transition: background 0.2s, border-color 0.2s, color 0.2s !important;
     min-width: auto !important;
 }
 .pdf-btn [data-testid="stDownloadButton"] > button:hover {
-    background: #fbbf24 !important;
-    color: #111111 !important;
+    background: #111111 !important;
+    border-color: #f59e0b !important;
+    color: #f59e0b !important;
+}
+
+/* ── Excel download button (in action row) ── */
+.excel-btn [data-testid="stDownloadButton"] > button {
+    background: #111111 !important;
+    border: 1px solid #333333 !important;
+    border-radius: 6px !important;
+    color: #fafafa !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    padding: 4px 8px !important;
+    white-space: nowrap !important;
+    transition: background 0.2s, border-color 0.2s, color 0.2s !important;
+    min-width: auto !important;
+}
+.excel-btn [data-testid="stDownloadButton"] > button:hover {
+    background: #111111 !important;
+    border-color: #f59e0b !important;
+    color: #f59e0b !important;
 }
 
 /* ── Sidebar helpers ── */
@@ -590,11 +623,19 @@ div[data-testid="stChatInput"],
     color: #fbbf24 !important;
     background: transparent !important;
 }
+
+/* ── Row count label ── */
+.row-count-label {
+    font-size: 12px; color: #737373; margin: 4px 0 8px; display: inline-block;
+}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M")
@@ -633,10 +674,6 @@ def _is_numeric(val) -> bool:
 
 
 def _compute_col_extremes(rows: list[dict], cols: list[str]) -> dict:
-    """
-    For each numeric column, find the index of the row with the max and min value.
-    Returns {col: {"max_idx": int, "min_idx": int}} for columns with 2+ distinct values.
-    """
     extremes: dict = {}
     for c in cols:
         vals = []
@@ -652,7 +689,17 @@ def _compute_col_extremes(rows: list[dict], cols: list[str]) -> dict:
     return extremes
 
 
+def _build_excel_bytes(rows: list[dict]) -> bytes:
+    """Build an Excel file in memory from a list of row dicts."""
+    buf = io.BytesIO()
+    df = pd.DataFrame(rows)
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Data")
+    return buf.getvalue()
+
+
 # ── PDF generation ────────────────────────────────────────────────────────────
+
 
 def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
     """Generate a PDF report with query, finding, table data, and footer."""
@@ -660,25 +707,27 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=20)
 
-    # Title
     pdf.set_font("Helvetica", "B", 16)
     pdf.cell(0, 10, "OLAP Assistant Report", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(4)
 
-    # Timestamp
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(130, 130, 130)
-    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(
+        0,
+        6,
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
     pdf.ln(4)
 
-    # Query
     pdf.set_font("Helvetica", "I", 11)
     pdf.set_text_color(80, 80, 80)
     safe_query = query.encode("latin-1", "replace").decode("latin-1")
     pdf.multi_cell(0, 6, f'You asked: "{safe_query}"')
     pdf.ln(4)
 
-    # Finding
     if finding:
         pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(0, 0, 0)
@@ -688,12 +737,7 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
         pdf.multi_cell(0, 6, safe_finding)
         pdf.ln(4)
 
-    # Table data
-    rows = (
-        result.get("result_rows")
-        or result.get("supporting_data")
-        or []
-    )
+    rows = result.get("result_rows") or result.get("supporting_data") or []
     if rows:
         pdf.set_font("Helvetica", "B", 11)
         pdf.set_text_color(0, 0, 0)
@@ -704,7 +748,6 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
         n_cols = len(cols)
         col_w = min(40, int((pdf.w - 20) / max(n_cols, 1)))
 
-        # Header
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_fill_color(240, 240, 240)
         for c in cols:
@@ -713,19 +756,19 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
             pdf.cell(col_w, 7, safe_label, border=1, fill=True)
         pdf.ln()
 
-        # Rows (max 30 for PDF)
         pdf.set_font("Helvetica", "", 8)
         pdf.set_fill_color(255, 255, 255)
         for row in rows[:30]:
             for c in cols:
                 val = row.get(c, "")
                 display = str(val) if val is not None else "-"
-                safe_display = display[:18].encode("latin-1", "replace").decode("latin-1")
+                safe_display = (
+                    display[:18].encode("latin-1", "replace").decode("latin-1")
+                )
                 pdf.cell(col_w, 6, safe_display, border=1)
             pdf.ln()
         pdf.ln(4)
 
-    # Chart analysis or summary
     analysis = result.get("chart_analysis") or result.get("summary_text") or ""
     if analysis:
         pdf.set_font("Helvetica", "B", 11)
@@ -736,7 +779,6 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
         pdf.multi_cell(0, 5, safe_analysis)
         pdf.ln(4)
 
-    # Interpretation (anomaly)
     interp = result.get("interpretation", "")
     if interp:
         pdf.set_font("Helvetica", "B", 11)
@@ -747,7 +789,6 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
         pdf.multi_cell(0, 5, safe_interp)
         pdf.ln(4)
 
-    # Footer
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(160, 160, 160)
     pdf.cell(0, 6, "OLAP Assistant", new_x="LMARGIN", new_y="NEXT", align="C")
@@ -760,7 +801,8 @@ def _generate_pdf(query: str, finding: str, result: dict) -> bytes:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown(f"""
+    st.markdown(
+        f"""
         <div style='padding:24px 0 12px; text-align:center;'>
             <img src='data:image/png;base64,{_ICON_B64}' style='width:48px; height:48px;' />
             <div style='font-size:20px; font-weight:700; color:#fafafa; margin:10px 0 4px;'>
@@ -771,9 +813,10 @@ with st.sidebar:
             </div>
         </div>
         <hr class='sidebar-divider' />
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-    # New conversation
     st.markdown('<div class="new-convo-btn">', unsafe_allow_html=True)
     if st.button("\u2295  New Conversation", use_container_width=True, key="new_convo"):
         try:
@@ -784,17 +827,18 @@ with st.sidebar:
             )
         except Exception:
             pass
-        st.session_state.session_id    = str(uuid.uuid4())
-        st.session_state.messages      = []
-        st.session_state.show_welcome  = True
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.session_state.show_welcome = True
         st.session_state.query_history = []
-        st.session_state.last_query    = ""
-        st.session_state.input_value   = ""
+        st.session_state.last_query = ""
+        st.session_state.input_value = ""
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Query history
-    st.markdown('<span class="sidebar-section-label">RECENT</span>', unsafe_allow_html=True)
+    st.markdown(
+        '<span class="sidebar-section-label">RECENT</span>', unsafe_allow_html=True
+    )
     if st.session_state.query_history:
         for qi, q in enumerate(st.session_state.query_history):
             label = f"\U0001f550 {q[:35]}{'...' if len(q) > 35 else ''}"
@@ -810,21 +854,25 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    # Pinned findings
-    st.markdown('<span class="sidebar-section-label">PINNED</span>', unsafe_allow_html=True)
+    st.markdown(
+        '<span class="sidebar-section-label">PINNED</span>', unsafe_allow_html=True
+    )
     if st.session_state.pinned:
         for pi, pin in enumerate(st.session_state.pinned):
-            # Support both dict pins {"question": str, "finding": str} and legacy string pins
             if isinstance(pin, dict):
                 q_text = pin.get("question", "")
                 f_text = pin.get("finding", "")
-                pin_label = f"\U0001f4cc {q_text[:40]}{'...' if len(q_text) > 40 else ''}"
+                pin_label = (
+                    f"\U0001f4cc {q_text[:40]}{'...' if len(q_text) > 40 else ''}"
+                )
                 pin_help = f_text[:120] if f_text else None
             else:
                 pin_label = f"\U0001f4cc {pin[:40]}{'...' if len(pin) > 40 else ''}"
                 pin_help = None
             st.markdown('<div class="pin-btn">', unsafe_allow_html=True)
-            if st.button(pin_label, key=f"unpin_{pi}", use_container_width=True, help=pin_help):
+            if st.button(
+                pin_label, key=f"unpin_{pi}", use_container_width=True, help=pin_help
+            ):
                 st.session_state.pinned.pop(pi)
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
@@ -835,21 +883,26 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    # Quick action cards
-    st.markdown('<span class="sidebar-section-label">QUICK ACTIONS</span>', unsafe_allow_html=True)
+    st.markdown(
+        '<span class="sidebar-section-label">QUICK ACTIONS</span>',
+        unsafe_allow_html=True,
+    )
     for row_start in range(0, len(PROMPT_TEMPLATES), 2):
-        pair = PROMPT_TEMPLATES[row_start:row_start + 2]
+        pair = PROMPT_TEMPLATES[row_start : row_start + 2]
         cols = st.columns(2)
         for col, (icon, label, template) in zip(cols, pair):
             with col:
                 st.markdown('<div class="card-btn">', unsafe_allow_html=True)
-                if st.button(f"{icon} {label}", key=f"tpl_{label}", use_container_width=True):
+                if st.button(
+                    f"{icon} {label}", key=f"tpl_{label}", use_container_width=True
+                ):
                     st.session_state.input_value = template
                     st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ── API helpers ───────────────────────────────────────────────────────────────
+
 
 def call_query_api(query: str, session_id: str) -> dict:
     try:
@@ -869,15 +922,18 @@ def call_query_api(query: str, session_id: str) -> dict:
             ),
         }
     except requests.exceptions.Timeout:
-        return {"status": "error", "message": "Request timed out (90 s). The query may be too complex."}
+        return {
+            "status": "error",
+            "message": "Request timed out (90 s). The query may be too complex.",
+        }
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
 
 
 # ── Render: common elements ──────────────────────────────────────────────────
 
+
 def render_you_asked(query: str) -> None:
-    """Show 'You asked: "..."' quote above the finding."""
     if query:
         safe = html.escape(query)
         st.markdown(
@@ -887,7 +943,6 @@ def render_you_asked(query: str) -> None:
 
 
 def render_finding(finding: str) -> None:
-    """Show the finding sentence in styled box."""
     if finding:
         safe = html.escape(finding)
         st.markdown(
@@ -897,7 +952,6 @@ def render_finding(finding: str) -> None:
 
 
 def render_follow_ups(questions: list[str], msg_idx: int) -> None:
-    """Show follow-up suggestion chips."""
     if not questions:
         return
     st.markdown(
@@ -923,7 +977,7 @@ def render_pdf_download(query: str, result: dict, msg_idx: int) -> None:
     pdf_bytes = _generate_pdf(query, finding, result)
     st.markdown('<div class="pdf-btn">', unsafe_allow_html=True)
     st.download_button(
-        "\u2b07 Download as PDF",
+        "\u2b07 PDF",
         data=pdf_bytes,
         file_name="olap_report.pdf",
         mime="application/pdf",
@@ -934,19 +988,27 @@ def render_pdf_download(query: str, result: dict, msg_idx: int) -> None:
 
 # ── Render: result table with trend arrows ───────────────────────────────────
 
-def render_result_table(rows: list[dict], table_class: str = "result-table") -> None:
-    """Render an HTML table with trend arrows on numeric columns."""
+_TABLE_PREVIEW_LIMIT = 10
+
+
+def render_result_table(
+    rows: list[dict],
+    table_class: str = "result-table",
+    table_key: str = "",
+) -> bytes | None:
+    """Render an HTML table. Returns Excel bytes for all rows (used in action row)."""
     if not rows:
-        return
+        return None
+
+    total = len(rows)
+    display_rows = rows[:_TABLE_PREVIEW_LIMIT]
 
     cols = list(rows[0].keys())
-    extremes = _compute_col_extremes(rows, cols)
+    extremes = _compute_col_extremes(display_rows, cols)
 
-    hdr = "".join(
-        f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
-    )
+    hdr = "".join(f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in cols)
     body = ""
-    for i, row in enumerate(rows):
+    for i, row in enumerate(display_rows):
         cells = ""
         for c in cols:
             val = row.get(c)
@@ -954,7 +1016,6 @@ def render_result_table(rows: list[dict], table_class: str = "result-table") -> 
                 cells += '<td class="null-cell">\u2014</td>'
                 continue
 
-            # Format percentage columns
             if c.endswith("_pct") and _is_numeric(val):
                 try:
                     pct = float(val)
@@ -962,7 +1023,7 @@ def render_result_table(rows: list[dict], table_class: str = "result-table") -> 
                     sign = "+" if pct > 0 else ""
                     cells += (
                         f'<td style="color:{color}; font-weight:600;">'
-                        f'{sign}{pct:.2f}%</td>'
+                        f"{sign}{pct:.2f}%</td>"
                     )
                     continue
                 except (TypeError, ValueError):
@@ -973,7 +1034,6 @@ def render_result_table(rows: list[dict], table_class: str = "result-table") -> 
                 cells += '<td class="null-cell">\u2014</td>'
                 continue
 
-            # Add trend arrows
             arrow = ""
             if c in extremes:
                 if i == extremes[c]["max_idx"]:
@@ -986,14 +1046,29 @@ def render_result_table(rows: list[dict], table_class: str = "result-table") -> 
 
     st.markdown(
         f'<table class="{table_class}"><thead><tr>{hdr}</tr></thead>'
-        f'<tbody>{body}</tbody></table>',
+        f"<tbody>{body}</tbody></table>",
         unsafe_allow_html=True,
     )
 
+    # Row count — text only, no download button here (moved to action row)
+    shown = min(total, _TABLE_PREVIEW_LIMIT)
+    if total > _TABLE_PREVIEW_LIMIT:
+        count_label = f"Showing {shown} of {total:,} rows"
+    else:
+        count_label = f"{total:,} row{'s' if total != 1 else ''}"
 
-def render_sections(sections: list[dict]) -> None:
-    """Render multiple data sections, each with its own title and table."""
-    for sec in sections:
+    st.markdown(
+        f'<div class="row-count-label">{count_label}</div>',
+        unsafe_allow_html=True,
+    )
+
+    return _build_excel_bytes(rows)
+
+
+def render_sections(sections: list[dict], key_prefix: str = "sec") -> bytes | None:
+    """Render multiple data sections. Returns Excel bytes from last non-empty section."""
+    last_excel: bytes | None = None
+    for idx, sec in enumerate(sections):
         title = sec.get("title", "")
         rows = sec.get("rows", [])
         explanation = sec.get("explanation", "")
@@ -1002,36 +1077,37 @@ def render_sections(sections: list[dict]) -> None:
             st.markdown(
                 f'<div style="font-size:13px; font-weight:700; color:#f59e0b; '
                 f'text-transform:uppercase; letter-spacing:0.08em; margin:18px 0 8px;">'
-                f'{html.escape(title)}</div>',
+                f"{html.escape(title)}</div>",
                 unsafe_allow_html=True,
             )
 
         if rows:
-            render_result_table(rows)
+            excel = render_result_table(rows, table_key=f"{key_prefix}_{idx}")
+            if excel:
+                last_excel = excel
 
         if explanation:
             st.markdown(
                 f'<div style="font-size:13px; color:#a0a0a0; font-style:italic; '
                 f'line-height:1.6; margin:4px 0 14px; padding:0 4px;">'
-                f'{html.escape(explanation)}</div>',
+                f"{html.escape(explanation)}</div>",
                 unsafe_allow_html=True,
             )
+    return last_excel
 
 
 # ── Render: mode-specific content ────────────────────────────────────────────
 
-def render_mode_direct(result: dict) -> None:
-    """Direct: small supporting data table with trend arrows, no expander."""
+
+def render_mode_direct(result: dict) -> bytes | None:
     rows = result.get("supporting_data", [])
     if not rows:
-        return
+        return None
 
     cols = list(rows[0].keys())
     extremes = _compute_col_extremes(rows, cols)
 
-    hdr = "".join(
-        f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in cols
-    )
+    hdr = "".join(f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in cols)
     body = ""
     for i, row in enumerate(rows):
         cells = ""
@@ -1051,18 +1127,20 @@ def render_mode_direct(result: dict) -> None:
         body += f"<tr>{cells}</tr>"
     st.markdown(
         f'<table class="direct-table"><thead><tr>{hdr}</tr></thead>'
-        f'<tbody>{body}</tbody></table>',
+        f"<tbody>{body}</tbody></table>",
         unsafe_allow_html=True,
     )
+    return _build_excel_bytes(rows)
 
 
 def render_mode_chart(result: dict) -> None:
-    """Chart: Plotly chart + chart_analysis paragraph."""
     figure_json = result.get("figure_json")
     if figure_json:
         try:
             fig = pio.from_json(json.dumps(figure_json))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(
+                fig, use_container_width=True, config={"displayModeBar": False}
+            )
         except Exception:
             pass
 
@@ -1074,52 +1152,49 @@ def render_mode_chart(result: dict) -> None:
         )
 
 
-def render_mode_comparison(result: dict) -> None:
-    """Comparison: result table(s) with trend arrows."""
+def render_mode_comparison(result: dict, msg_idx: int = 0) -> bytes | None:
     sections = result.get("sections")
     if sections:
-        render_sections(sections)
-    else:
-        rows = result.get("result_rows", [])
-        render_result_table(rows)
+        return render_sections(sections, key_prefix=f"cmp_{msg_idx}")
+    return render_result_table(
+        result.get("result_rows", []), table_key=f"cmp_{msg_idx}"
+    )
 
 
-def render_mode_list(result: dict) -> None:
-    """List: result table(s) with trend arrows."""
+def render_mode_list(result: dict, msg_idx: int = 0) -> bytes | None:
     sections = result.get("sections")
     if sections:
-        render_sections(sections)
-    else:
-        rows = result.get("result_rows", [])
-        render_result_table(rows)
+        return render_sections(sections, key_prefix=f"lst_{msg_idx}")
+    return render_result_table(
+        result.get("result_rows", []), table_key=f"lst_{msg_idx}"
+    )
 
 
 def render_mode_summary(result: dict) -> None:
-    """Summary: clean readable text."""
     text = result.get("summary_text", "")
     if text:
         st.markdown(
             f'<div class="summary-text">{html.escape(text)}</div>',
             unsafe_allow_html=True,
         )
-
-    # Render exec summary card if present
     render_executive_summary(result)
 
 
 def render_mode_report(result: dict, is_last: bool) -> None:
-    """Report: full monospace expander + optional chart/anomaly/exec."""
     report_text = result.get("report", "")
     if report_text:
         with st.expander("\U0001f4c4  View Full Report", expanded=is_last):
             safe_r = html.escape(report_text).replace("$", "&#36;")
-            st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True
+            )
 
-    # Bubble up chart
     if result.get("figure_json"):
         try:
             fig = pio.from_json(json.dumps(result["figure_json"]))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(
+                fig, use_container_width=True, config={"displayModeBar": False}
+            )
         except Exception:
             pass
 
@@ -1128,38 +1203,42 @@ def render_mode_report(result: dict, is_last: bool) -> None:
 
 
 def render_mode_anomaly(result: dict) -> None:
-    """Anomaly: red-styled anomaly table."""
     render_anomaly_table(result)
 
 
-def render_mode_default(result: dict, is_last: bool) -> None:
-    """Default: result table(s) if available, otherwise report expander."""
+def render_mode_default(result: dict, is_last: bool, msg_idx: int = 0) -> bytes | None:
+    excel_bytes: bytes | None = None
     sections = result.get("sections")
     rows = result.get("result_rows", [])
     if sections:
-        render_sections(sections)
+        excel_bytes = render_sections(sections, key_prefix=f"def_{msg_idx}")
     elif rows:
-        render_result_table(rows)
+        excel_bytes = render_result_table(rows, table_key=f"def_{msg_idx}")
 
     report_text = result.get("report", "")
     if report_text:
         with st.expander("\U0001f4c4  View Full Report", expanded=is_last and not rows):
             safe_r = html.escape(report_text).replace("$", "&#36;")
-            st.markdown(f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="report-pre">{safe_r}</div>', unsafe_allow_html=True
+            )
 
-    # Bubble up chart / anomaly / exec
     if result.get("figure_json"):
         try:
             fig = pio.from_json(json.dumps(result["figure_json"]))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(
+                fig, use_container_width=True, config={"displayModeBar": False}
+            )
         except Exception:
             pass
 
     render_anomaly_table(result)
     render_executive_summary(result)
+    return excel_bytes
 
 
 # ── Render: anomaly + executive summary (shared helpers) ─────────────────────
+
 
 def render_anomaly_table(result: dict) -> None:
     anomalies = result.get("anomalies")
@@ -1172,21 +1251,21 @@ def render_anomaly_table(result: dict) -> None:
     )
 
     cols = list(anomalies[0].keys())
-    hdr  = "".join(f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in cols)
+    hdr = "".join(f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in cols)
     body = "".join(
-        "<tr>" + "".join(
-            f"<td>{html.escape(str(row.get(c, '')))}</td>" for c in cols
-        ) + "</tr>"
+        "<tr>"
+        + "".join(f"<td>{html.escape(str(row.get(c, '')))}</td>" for c in cols)
+        + "</tr>"
         for row in anomalies
     )
     count = result["anomaly_count"]
     st.markdown(
         f'<div class="anomaly-section">'
         f'<div class="anomaly-header">\u26a0 {count} anomal{"y" if count == 1 else "ies"} detected</div>'
-        f'{interp_html}'
+        f"{interp_html}"
         f'<table class="anomaly-table"><thead><tr>{hdr}</tr></thead>'
-        f'<tbody>{body}</tbody></table>'
-        f'</div>',
+        f"<tbody>{body}</tbody></table>"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -1194,8 +1273,8 @@ def render_anomaly_table(result: dict) -> None:
 def render_executive_summary(result: dict) -> None:
     headline = result.get("exec_headline", "")
     insights = result.get("exec_insights", [])
-    action   = result.get("exec_action", "")
-    risks    = result.get("exec_risks", [])
+    action = result.get("exec_action", "")
+    risks = result.get("exec_risks", [])
 
     if not headline and not insights:
         return
@@ -1205,7 +1284,7 @@ def render_executive_summary(result: dict) -> None:
     )
     bl_html = ""
     if insights:
-        items   = "".join(f"<li>{html.escape(b)}</li>" for b in insights)
+        items = "".join(f"<li>{html.escape(b)}</li>" for b in insights)
         bl_html = (
             '<div class="exec-section-label">Key Insights</div>'
             f'<ul class="exec-insights">{items}</ul>'
@@ -1216,46 +1295,47 @@ def render_executive_summary(result: dict) -> None:
             '<div class="exec-action-wrap"><div class="exec-action">'
             '<div class="exec-action-label">Recommended Action</div>'
             f'<div class="exec-action-text">{html.escape(action)}</div>'
-            '</div></div>'
+            "</div></div>"
         )
 
     st.markdown(
         '<div class="exec-card">'
         '<div class="exec-card-header">'
         '<span class="exec-card-label">Executive Summary</span>'
-        '</div>'
-        f'{hl_html}{bl_html}{ac_html}'
-        '</div>',
+        "</div>"
+        f"{hl_html}{bl_html}{ac_html}"
+        "</div>",
         unsafe_allow_html=True,
     )
 
     if risks:
-        all_cols  = list(risks[0].keys())
+        all_cols = list(risks[0].keys())
         data_cols = [c for c in all_cols if c != "risk_reason"]
-        r_cols    = data_cols + (["risk_reason"] if "risk_reason" in all_cols else [])
+        r_cols = data_cols + (["risk_reason"] if "risk_reason" in all_cols else [])
         hdr = "".join(
-            f'<th>{html.escape(c.replace("_", " ").title())}</th>' for c in r_cols
+            f"<th>{html.escape(c.replace('_', ' ').title())}</th>" for c in r_cols
         )
         body = ""
         for row in risks:
             cells = ""
             for c in r_cols:
                 cls = ' class="risk-reason"' if c == "risk_reason" else ""
-                cells += f'<td{cls}>{html.escape(str(row.get(c, "")))}</td>'
+                cells += f"<td{cls}>{html.escape(str(row.get(c, '')))}</td>"
             body += f"<tr>{cells}</tr>"
         st.markdown(
             f'<div class="risk-section">'
             f'<div class="risk-header">'
-            f'\u26a1 {len(risks)} at-risk area{"s" if len(risks) != 1 else ""}'
-            f'</div>'
+            f"\u26a1 {len(risks)} at-risk area{'s' if len(risks) != 1 else ''}"
+            f"</div>"
             f'<table class="risk-table"><thead><tr>{hdr}</tr></thead>'
-            f'<tbody>{body}</tbody></table>'
-            f'</div>',
+            f"<tbody>{body}</tbody></table>"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
 
 # ── Render: user bubble ──────────────────────────────────────────────────────
+
 
 def render_user_bubble(text: str, ts: str = "") -> None:
     safe = html.escape(text)
@@ -1268,7 +1348,8 @@ def render_user_bubble(text: str, ts: str = "") -> None:
 
 def render_typing_indicator():
     ph = st.empty()
-    ph.markdown("""
+    ph.markdown(
+        """
         <div class="typing-row">
             <div class="typing-bubble">
                 <span class="typing-label">Analyzing data</span>
@@ -1277,14 +1358,18 @@ def render_typing_indicator():
                 </div>
             </div>
         </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
     return ph
 
 
 # ── Render: assistant bubble (main dispatcher) ───────────────────────────────
 
-def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str = "") -> None:
-    # Error state
+
+def render_assistant_bubble(
+    result: dict, msg_idx: int, is_last: bool, ts: str = ""
+) -> None:
     if result.get("status") == "error":
         msg = html.escape(result.get("message", "An unknown error occurred."))
         st.markdown(
@@ -1295,11 +1380,10 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
         return
 
     response_mode = result.get("response_mode", "default")
-    finding       = result.get("finding", "")
-    follow_ups    = result.get("follow_up_questions", [])
-    orig_query    = result.get("_query", "")
+    finding = result.get("finding", "")
+    follow_ups = result.get("follow_up_questions", [])
+    orig_query = result.get("_query", "")
 
-    # Check if all agent results errored — no useful data at all
     has_rows = bool(
         result.get("result_rows")
         or result.get("supporting_data")
@@ -1309,12 +1393,14 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
     )
     report_text = result.get("report", "")
     if not has_rows and not finding and report_text:
-        # Likely an error wrapped in a report — show friendly message
-        # Extract the first error reason from the report
         error_reason = ""
         for line in report_text.splitlines():
             stripped = line.strip().strip("─").strip()
-            if stripped and "error" not in stripped.lower() and "status" not in stripped.lower():
+            if (
+                stripped
+                and "error" not in stripped.lower()
+                and "status" not in stripped.lower()
+            ):
                 error_reason = stripped
                 break
         if not error_reason:
@@ -1323,62 +1409,84 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
         st.markdown(
             f'<div class="ts-left">{ts}</div>'
             f'<div style="background:#1a1a1a; border:1px solid rgba(245,158,11,0.3); '
-            f'border-left:3px solid #f59e0b; border-radius:8px; padding:14px 18px; '
+            f"border-left:3px solid #f59e0b; border-radius:8px; padding:14px 18px; "
             f'margin:14px 15% 12px 0; font-size:14px; color:#a0a0a0; line-height:1.6;">'
-            f'Sorry, I couldn\'t process that query. {safe_reason}</div>',
+            f"Sorry, I couldn't process that query. {safe_reason}</div>",
             unsafe_allow_html=True,
         )
         render_follow_ups(follow_ups, msg_idx)
         return
 
-    # Timestamp
     st.markdown(f'<div class="ts-left">{ts}</div>', unsafe_allow_html=True)
-
-    # "You asked:" quote
     render_you_asked(orig_query)
-
-    # Finding sentence (always shown first)
     render_finding(finding)
 
-    # Mode-specific content
-    if response_mode == "direct":
-        render_mode_direct(result)
+    # Mode-specific content — capture excel bytes if available
+    excel_bytes: bytes | None = None
 
+    if response_mode == "direct":
+        excel_bytes = render_mode_direct(result)
     elif response_mode == "chart":
         render_mode_chart(result)
-
     elif response_mode == "comparison":
-        render_mode_comparison(result)
-
+        excel_bytes = render_mode_comparison(result, msg_idx)
     elif response_mode == "list":
-        render_mode_list(result)
-
+        excel_bytes = render_mode_list(result, msg_idx)
     elif response_mode == "summary":
         render_mode_summary(result)
-
     elif response_mode == "report":
         render_mode_report(result, is_last)
-
     elif response_mode == "anomaly":
         render_mode_anomaly(result)
+    else:
+        excel_bytes = render_mode_default(result, is_last, msg_idx)
 
-    else:  # "default"
-        render_mode_default(result, is_last)
+    # ── Unified action row: Pin | Copy | PDF | Excel (all on one line) ──
+    show_pdf = response_mode in _PDF_MODES
+    show_excel = excel_bytes is not None
 
-    # Action row: PDF download + copy + pin + re-run
-    report_text = result.get("report", "")
-    c1, c2, c3, c4, _pad = st.columns([1.2, 1, 0.8, 1, 6])
+    # Fixed order: pin, copy, pdf (optional), excel (optional), padding
+    col_widths = [0.65, 0.85]
+    col_labels = ["pin", "copy"]
+    if show_pdf:
+        col_widths.append(1.2)
+        col_labels.append("pdf")
+    if show_excel:
+        col_widths.append(1.2)
+        col_labels.append("excel")
+    col_widths.append(6)
+    col_labels.append("pad")
 
-    with c1:
-        render_pdf_download(orig_query, result, msg_idx)
+    action_cols = st.columns(col_widths)
+    col_map = {label: action_cols[i] for i, label in enumerate(col_labels)}
 
-    with c2:
+    with col_map["pin"]:
         st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
-        if st.button("\U0001f4cb Copy", key=f"copy_{msg_idx}", help="Copy finding to clipboard"):
+        if st.button(
+            "\U0001f4cc Pin",
+            key=f"pin_{msg_idx}",
+            help="Pin this finding",
+            disabled=not bool(finding),
+        ):
+            if finding:
+                pinned = st.session_state.pinned
+                existing_findings = {
+                    (p.get("finding") if isinstance(p, dict) else p) for p in pinned
+                }
+                if finding not in existing_findings:
+                    pinned.insert(0, {"question": orig_query, "finding": finding})
+                    st.session_state.pinned = pinned[:10]
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_map["copy"]:
+        st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
+        if st.button(
+            "\U0001f4cb Copy", key=f"copy_{msg_idx}", help="Copy finding to clipboard"
+        ):
             text_to_copy = finding or report_text or ""
             safe_js = (
-                text_to_copy
-                .replace("\\", "\\\\")
+                text_to_copy.replace("\\", "\\\\")
                 .replace("`", "\\`")
                 .replace("$", "\\$")
             )
@@ -1398,38 +1506,30 @@ def render_assistant_bubble(result: dict, msg_idx: int, is_last: bool, ts: str =
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with c3:
-        if finding:
-            st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
-            if st.button("\U0001f4cc Pin", key=f"pin_{msg_idx}", help="Pin this finding"):
-                pinned = st.session_state.pinned
-                # Deduplicate by finding text
-                existing_findings = {
-                    (p.get("finding") if isinstance(p, dict) else p)
-                    for p in pinned
-                }
-                if finding not in existing_findings:
-                    pinned.insert(0, {"question": orig_query, "finding": finding})
-                    st.session_state.pinned = pinned[:10]
-                st.rerun()
+    if show_pdf:
+        with col_map["pdf"]:
+            render_pdf_download(orig_query, result, msg_idx)
+
+    if show_excel:
+        with col_map["excel"]:
+            st.markdown('<div class="excel-btn">', unsafe_allow_html=True)
+            st.download_button(
+                label="\u2b07 Excel",
+                data=excel_bytes,
+                file_name="olap_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"xlsx_{msg_idx}",
+            )
             st.markdown("</div>", unsafe_allow_html=True)
 
-    with c4:
-        if orig_query:
-            st.markdown('<div class="action-ghost">', unsafe_allow_html=True)
-            if st.button("\U0001f504 Re-run", key=f"rerun_{msg_idx}"):
-                st.session_state.input_value = orig_query
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    # Follow-up suggestions
     render_follow_ups(follow_ups, msg_idx)
 
 
 # ── Main chat area ────────────────────────────────────────────────────────────
 
 if not st.session_state.messages:
-    st.markdown(f"""
+    st.markdown(
+        f"""
         <div class="welcome-wrap">
             <div class="welcome-card">
                 <div class="welcome-icon"><img src='data:image/png;base64,{_ICON_B64}' style='width:64px; height:64px;' /></div>
@@ -1439,7 +1539,9 @@ if not st.session_state.messages:
                 </div>
             </div>
         </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
     st.markdown(
         '<div class="welcome-hint">\u2190 Pick a quick action or type below</div>',
         unsafe_allow_html=True,
@@ -1457,15 +1559,11 @@ else:
 
 # ── Input area ────────────────────────────────────────────────────────────────
 
-# If a card, history item, or follow-up was clicked, inject JS to pre-populate.
 if st.session_state.input_value:
-    _tpl = (
-        st.session_state.input_value
-        .replace("\\", "\\\\")
-        .replace("`", "\\`")
-    )
+    _tpl = st.session_state.input_value.replace("\\", "\\\\").replace("`", "\\`")
     st.session_state.input_value = ""
-    components.html(f"""
+    components.html(
+        f"""
     <script>
     (function() {{
         function inject() {{
@@ -1483,35 +1581,37 @@ if st.session_state.input_value:
         inject();
     }})();
     </script>
-    """, height=0)
+    """,
+        height=0,
+    )
 
 user_input = st.chat_input("Ask about your sales data...")
 
 if user_input:
     st.session_state.show_welcome = False
-    st.session_state.last_query   = user_input
+    st.session_state.last_query = user_input
     _update_history(user_input)
     ts_now = _ts()
 
-    # Display user bubble immediately before API call
-    st.session_state.messages.append({"role": "user", "content": user_input, "ts": ts_now})
+    st.session_state.messages.append(
+        {"role": "user", "content": user_input, "ts": ts_now}
+    )
     render_user_bubble(user_input, ts=ts_now)
 
-    # Show typing indicator while waiting
     typing_ph = render_typing_indicator()
 
-    # Call API
     result = call_query_api(user_input, st.session_state.session_id)
     result["_query"] = user_input
 
-    # Clear typing indicator
     typing_ph.empty()
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": result,
-        "ts": _ts(),
-    })
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": result,
+            "ts": _ts(),
+        }
+    )
     st.rerun()
 
 st.markdown('<div class="kb-hint">Press Enter to send</div>', unsafe_allow_html=True)

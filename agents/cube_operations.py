@@ -45,6 +45,7 @@ Usage
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from agents.base_agent import BaseAgent
@@ -94,6 +95,15 @@ _MEASURES: dict[str, tuple[str, str]] = {
 
 _VALID_FIELDS = sorted(_FIELD_MAP)
 _VALID_MEASURES = sorted(_MEASURES)
+
+# Maps measure name → raw fact column for row-level WHERE filtering
+_MEASURE_FILTER_MAP: dict[str, str] = {
+    "revenue":       "f.revenue",
+    "profit":        "f.profit",
+    "cost":          "f.cost",
+    "quantity":      "f.quantity",
+    "profit_margin": "f.profit_margin",
+}
 
 # When slicing on a dimension and summarize=True, show breakdown by this secondary dimension
 _SECONDARY_DIM: dict[str, str] = {
@@ -151,15 +161,20 @@ class CubeOperationsAgent(BaseAgent):
         return self._list_orders({dimension: value})
 
     def dice(self, filters: dict[str, Any], summarize: bool = False) -> dict:
-        print(f"DEBUG DICE CALLED: filters={filters} summarize={summarize}", flush=True)
         """
-        Filter on multiple dimensions simultaneously.
+        Filter on multiple dimensions and/or measure thresholds simultaneously.
+
+        Dimension fields go to WHERE clause.
+        Measure fields (revenue, profit, etc.) go to HAVING clause.
+        Measure values support operators: ">500", ">=1000", "<200", "=500"
 
         Parameters
         ----------
         filters:
-            Mapping of field name → value,
-            e.g. {"year": 2024, "country": "Italy"}.
+            Mapping of field name → value for dimensions AND/OR measure thresholds.
+            Dimension fields: year, quarter, month, region, country, etc.
+            Measure fields: revenue, profit, cost, quantity, order_count, profit_margin
+                — pass as operator strings: {"revenue": ">500"} or {"profit": ">=1000"}
         summarize:
             False (default) — return individual order rows with all fields.
             True            — return grouped aggregate totals.
@@ -168,6 +183,9 @@ class CubeOperationsAgent(BaseAgent):
         --------
         dice({"country": "Italy", "year": 2024})
             → all orders from Italy in 2024
+
+        dice({"region": "Asia Pacific", "year": 2023, "revenue": ">500"})
+            → orders from Asia Pacific in 2023 with revenue > 500
 
         dice({"region": "Europe"}, summarize=True)
             → per-category revenue/profit totals for Europe
@@ -178,12 +196,26 @@ class CubeOperationsAgent(BaseAgent):
                 "message": "dice() requires at least one filter.",
             }
 
-        for field in filters:
+        # Separate dimension filters from measure filters
+        dim_filters     = {k: v for k, v in filters.items() if k in _FIELD_MAP}
+        measure_filters = {k: v for k, v in filters.items() if k in _MEASURE_FILTER_MAP}
+        unknown         = set(filters) - set(dim_filters) - set(measure_filters)
+        if unknown:
+            return {
+                "status": "error",
+                "message": (
+                    f"Unknown filter field(s): {unknown}. "
+                    f"Valid dimension fields: {_VALID_FIELDS}. "
+                    f"Valid measure fields: {list(_MEASURE_FILTER_MAP)}."
+                ),
+            }
+
+        for field in dim_filters:
             self._validate_field(field)
 
-        if summarize:
-            return self._dice_summary(filters)
-        return self._list_orders(filters)
+        if summarize and not measure_filters:
+            return self._dice_summary(dim_filters)
+        return self._list_orders(dim_filters, measure_filters)
 
     def pivot(self, row_dim: str, col_dim: str, measure: str) -> dict:
         """
@@ -415,17 +447,32 @@ ORDER BY {row_dim}
 
     # ── private row-level query ───────────────────────────────────────────────
 
-    def _list_orders(self, filters: dict[str, Any]) -> dict:
+    def _list_orders(
+        self,
+        filters: dict[str, Any],
+        measure_filters: dict[str, Any] | None = None,
+    ) -> dict:
         """
-        Return individual order rows matching *filters*.
+        Return individual order rows matching *filters* and optional *measure_filters*.
 
         All dimension and measure fields are included — no aggregation.
         One row per transaction, ordered by date descending.
+
+        Measure filters apply WHERE conditions on raw fact columns,
+        e.g. {"revenue": ">500"} → WHERE f.revenue > 500.
         """
         conditions = [
             f"{_FIELD_MAP[field][0]} = {self._quote(field, val)}"
             for field, val in filters.items()
         ]
+
+        # Add measure threshold conditions (row-level, no aggregation)
+        if measure_filters:
+            for measure, raw_val in measure_filters.items():
+                col = _MEASURE_FILTER_MAP[measure]
+                op, num = self._parse_measure_filter(str(raw_val))
+                conditions.append(f"{col} {op} {num}")
+
         where = ("WHERE " + "\n  AND ".join(conditions)) if conditions else ""
 
         sql = f"""
@@ -635,6 +682,17 @@ FROM fact_sales f
             return str(int(value))
         # Escape any single quotes in string values
         return "'" + str(value).replace("'", "''") + "'"
+
+    def _parse_measure_filter(self, raw: str) -> tuple[str, str]:
+        """Parse '>500', '>=1000', '<200', '500' → (operator, number_str)."""
+        m = re.match(r"^\s*(>=|<=|!=|>|<|=)?\s*(-?\d+(?:\.\d+)?)\s*$", raw)
+        if not m:
+            raise ValueError(
+                f"Invalid measure filter {raw!r}. Use e.g. '>500', '>=1000', '<200'."
+            )
+        op  = m.group(1) or ">"
+        num = m.group(2)
+        return op, num
 
     def _collect_joins(self, fields: Any) -> str:
         """Return deduplicated JOIN clauses for the given *fields*, preserving order."""

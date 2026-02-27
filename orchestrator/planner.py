@@ -1,24 +1,5 @@
 """
 Planner — master orchestrator for the OLAP assistant.
-
-Loads credentials, initialises all agents, uses Claude to classify every
-user query into a structured execution plan, dispatches to the correct agent
-methods (chaining where needed), and returns structured responses with
-mode-specific fields, a finding sentence, and follow-up questions.
-
-Response modes
-──────────────
-  direct, chart, comparison, list, summary, report, anomaly, default
-
-Every response includes: finding, follow_up_questions, response_mode, plus
-mode-specific fields (see _build_* methods).
-
-Usage
-─────
-    from orchestrator.planner import Planner
-
-    planner = Planner()
-    result = planner.run("Show me year-over-year revenue growth by region")
 """
 
 from __future__ import annotations
@@ -42,8 +23,6 @@ from agents.optional.executive_summary import ExecutiveSummaryAgent
 from agents.optional.visualization import VisualizationAgent
 from agents.report_generator import ReportGeneratorAgent
 
-# ── Agent imports ──────────────────────────────────────────────────────────────
-# Add project root to path so imports work regardless of working directory
 _ROOT = pathlib.Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -96,39 +75,43 @@ _REPORT_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Maps Q-string aliases → integer quarter value
+_QUARTER_ALIAS: dict[str, int] = {
+    "q1": 1,
+    "q2": 2,
+    "q3": 3,
+    "q4": 4,
+    "1q": 1,
+    "2q": 2,
+    "3q": 3,
+    "4q": 4,
+    "quarter 1": 1,
+    "quarter 2": 2,
+    "quarter 3": 3,
+    "quarter 4": 4,
+}
+
 
 def _detect_response_mode(query: str, steps: list[dict]) -> str:
-    """
-    Determine response mode from query text and execution plan steps.
-
-    Priority: chart > anomaly > report > summary > comparison > list > direct > default
-    """
     agent_names = {s.get("agent", "") for s in steps}
     q = query.lower().strip()
 
-    # Plan-based modes
     if "visualization" in agent_names:
         return "chart"
+    _TREND_KEYWORDS = {"trend", "over time", "trendline", "trend line"}
+    if any(kw in q for kw in _TREND_KEYWORDS):
+        return "chart"
+
     if "anomaly" in agent_names:
         return "anomaly"
-
-    # Explicit report request
     if _REPORT_PATTERNS.search(q):
         return "report"
-
-    # Summary mode
     if "summary" in q:
         return "summary"
-
-    # Comparison keywords
     if any(kw in q for kw in _COMPARISON_KEYWORDS):
         return "comparison"
-
-    # List / ranking
     if _LIST_PATTERNS.search(q):
         return "list"
-
-    # Direct factual question + single step
     if (
         any(q.startswith(p) for p in _DIRECT_PREFIXES)
         and len(steps) == 1
@@ -140,7 +123,98 @@ def _detect_response_mode(query: str, steps: list[dict]) -> str:
     return "default"
 
 
-# ── System prompt for query classification ────────────────────────────────────
+# ── Quarter normalisation ─────────────────────────────────────────────────────
+
+
+def _coerce_quarter(value: Any) -> Any:
+    """
+    Convert any quarter representation to a plain integer 1-4.
+
+    Handles: "Q4", "q4", "2024-Q4", "Quarter 4", 4, "4", etc.
+    Returns the original value unchanged if it cannot be recognised.
+    """
+    if isinstance(value, int) and 1 <= value <= 4:
+        return value
+
+    if isinstance(value, (int, float)):
+        iv = int(value)
+        if 1 <= iv <= 4:
+            return iv
+
+    if isinstance(value, str):
+        s = value.strip().lower()
+
+        # Plain integer string "1".."4"
+        if s.isdigit() and 1 <= int(s) <= 4:
+            return int(s)
+
+        # Direct alias: "q4", "quarter 4", …
+        if s in _QUARTER_ALIAS:
+            return _QUARTER_ALIAS[s]
+
+        # Compound: "2024-q4", "2024 q4", "q4-2024", …
+        for alias, qint in _QUARTER_ALIAS.items():
+            if alias in s:
+                return qint
+
+    return value  # unchanged — let the agent surface a proper error
+
+
+def _normalize_params(agent: str, method: str, params: dict) -> dict:
+    """
+    Post-process LLM-generated params to fix common type errors before
+    they reach agent code.
+
+    Currently handles:
+      • quarter values in any string form  → integer 1-4
+    """
+    if not params:
+        return params
+
+    params = dict(params)  # shallow copy — don't mutate the original step
+
+    # ── navigator.drill_down / roll_up ────────────────────────────────────
+    # current_value may carry a quarter alias when dimension == "time"
+    if agent == "navigator" and method in {"drill_down", "roll_up"}:
+        if (
+            params.get("dimension") == "time"
+            and params.get("current_level") == "quarter"
+        ):
+            params["current_value"] = _coerce_quarter(params.get("current_value"))
+
+    # ── cube.slice ────────────────────────────────────────────────────────
+    if agent == "cube" and method == "slice":
+        if params.get("dimension") == "quarter":
+            params["value"] = _coerce_quarter(params.get("value"))
+
+    # ── cube.dice ─────────────────────────────────────────────────────────
+    if agent == "cube" and method == "dice":
+        filters = params.get("filters", {})
+        if isinstance(filters, dict) and "quarter" in filters:
+            filters = dict(filters)
+            filters["quarter"] = _coerce_quarter(filters["quarter"])
+            params["filters"] = filters
+
+    # ── kpi.* — filters kwarg ─────────────────────────────────────────────
+    if agent == "kpi":
+        filters = params.get("filters", {})
+        if isinstance(filters, dict) and "quarter" in filters:
+            filters = dict(filters)
+            filters["quarter"] = _coerce_quarter(filters["quarter"])
+            params["filters"] = filters
+
+    # ── anomaly.run — query dict ──────────────────────────────────────────
+    if agent == "anomaly" and method == "run":
+        q = params.get("query", {})
+        if isinstance(q, dict) and "quarter" in q:
+            q = dict(q)
+            q["quarter"] = _coerce_quarter(q["quarter"])
+            params["query"] = q
+
+    return params
+
+
+# ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """
 You are the query planner for an OLAP retail sales assistant (Jan 2022 – Dec 2024).
@@ -151,8 +225,15 @@ agent steps that answers the user's question.  Never reply in plain text.
 
 ── Dimension Fields ──────────────────────────────────────────────────────────
   Time      : year, quarter, month, month_name, order_date
-                quarter values are integers: 1 | 2 | 3 | 4
-                (NOT "Q1"/"Q2" — always pass the integer)
+
+                ╔══════════════════════════════════════════════════════════╗
+                ║  QUARTER VALUES ARE ALWAYS PLAIN INTEGERS: 1 | 2 | 3 | 4 ║
+                ║  NEVER pass strings like "Q1", "Q2", "Q3", "Q4",        ║
+                ║  "q4", "2024-Q4", "Quarter 4", or any other variant.    ║
+                ║  Q1 → 1   Q2 → 2   Q3 → 3   Q4 → 4                     ║
+                ║  Example: "Q4 2024"  → year=2024, quarter=4             ║
+                ║  Example: "Q1 2023"  → year=2023, quarter=1             ║
+                ╚══════════════════════════════════════════════════════════╝
 
   Geography : region, country
 
@@ -176,13 +257,15 @@ agent steps that answers the user's question.  Never reply in plain text.
 
 ── Surrogate / Join Keys (internal use only — do not filter or group by) ─────
   date_key, geography_key, product_key, customer_key, order_id
-  ━━━ AVAILABLE AGENTS & METHODS ━━━
+
+━━━ AVAILABLE AGENTS & METHODS ━━━
 
 agent: "navigator"
   drill_down(dimension, current_level, current_value)
     dimension      : "time" | "geography" | "product"
     current_level  : year|quarter|month  /  region|country  /  category|subcategory
     current_value  : the value to filter at current_level before going deeper
+                     For time/quarter: pass an INTEGER (1-4), never a string like "Q4"
   roll_up(dimension, current_level, current_value)
     same signature, navigates one level up instead
 
@@ -190,8 +273,17 @@ agent: "cube"
   slice(dimension, value)
     dimension : any field name
     value     : the value to filter by
+                For quarter dimension: INTEGER only (1, 2, 3, or 4)
   dice(filters)
-    filters   : dict of field->value, e.g. {"year": 2024, "region": "Europe"}
+    filters   : dict of field->value for dimensions AND/OR measure thresholds.
+                Dimension fields : year, quarter, month, region, country,
+                                   category, subcategory, customer_segment
+                Measure fields   : revenue, profit, cost, quantity,
+                                   order_count, profit_margin
+                                   — pass as operator strings:
+                                   {"revenue": ">500"} or {"profit": ">=1000"}
+                Quarter example  : {"quarter": 4, "year": 2024}  ← integer 4, not "Q4"
+                Full example     : {"region": "Asia Pacific", "year": 2023, "revenue": ">500"}
   pivot(row_dim, col_dim, measure)
     row_dim / col_dim : any field name
     measure : revenue | profit | cost | quantity | profit_margin | order_count
@@ -208,6 +300,7 @@ agent: "kpi"
     metric    : revenue | profit | cost | quantity | order_count | profit_margin
     n         : integer
     filters   : optional dict of field->value
+                Quarter in filters: integer only, e.g. {"quarter": 4}
   profit_margins(dimension)
     dimension : any field name
 
@@ -261,7 +354,24 @@ agent: "executive_summary"
       kpi.yoy_growth + kpi.profit_margins + kpi.top_n + executive_summary.run
 - "show totals then drill into X" / "totals + breakdown" → always 2 steps:
       cube.slice or cube.dice first, then navigator.drill_down second
+- "revenue > X" / "profit above X" / "orders over $X" / any measure threshold →
+      cube.dice with measure filter
 - Complex queries: use 2-3 steps combined into one report.
+
+━━━ DRILL-DOWN WITH QUARTER — CRITICAL EXAMPLES ━━━
+  "Drill Q4 2024 down to months"
+    → navigator.drill_down(dimension="time", current_level="quarter", current_value=4)
+      with year filter applied via dice first if needed
+      OR: cube.dice({"year": 2024, "quarter": 4}) + navigator.drill_down("time","quarter",4)
+
+  "Break Q1 2023 into months"
+    → cube.dice({"year": 2023, "quarter": 1}) then drill_down or mom_change
+
+  "Show monthly breakdown of Q3"
+    → navigator.drill_down(dimension="time", current_level="quarter", current_value=3)
+
+  Quarter integer mapping — MEMORISE THIS:
+    Q1 = 1    Q2 = 2    Q3 = 3    Q4 = 4
 
 ━━━ SINGLE-STEP FILTER RULE ━━━
 When the user asks to filter / slice / dice the data (cube.slice or cube.dice),
@@ -272,17 +382,7 @@ DEFAULT behaviour for slice and dice is to return individual order rows
 (one row per transaction). Pass summarize=false (or omit it) for this.
 
 Only pass summarize=true when the user EXPLICITLY asks for a summary,
-totals, breakdown, or grouped view — e.g.:
-  "give me a summary of 2024 orders"
-  "show totals by category for Europe"
-  "what's the revenue breakdown for Italy?"
-
-Examples:
-  "list 2024 orders"                         → cube.slice(year, 2024)                          ← row-level
-  "filter orders by Italy and 2024"          → cube.dice({"country":"Italy","year":2024})       ← row-level
-  "show all Electronics orders"              → cube.slice(category, Electronics)                ← row-level
-  "give me a 2024 summary by category"       → cube.slice(year, 2024, summarize=true)           ← grouped
-  "revenue breakdown for Europe"             → cube.dice({"region":"Europe"}, summarize=true)   ← grouped
+totals, breakdown, or grouped view.
 
 ━━━ CHAINING EXAMPLES ━━━
 "Revenue in Europe in 2024, then break it down to country"
@@ -290,13 +390,6 @@ Examples:
 
 "Show category totals, then drill into Electronics"
   → kpi.top_n(category, revenue, 10, {}) + navigator.drill_down(product, category, Electronics)
-
-"Show 2024 revenue, then break down Asia Pacific by country"
-  → cube.slice(year, 2024) + navigator.drill_down(geography, region, "Asia Pacific")
-
-"Top products in Asia Pacific with quarterly breakdown"
-  → kpi.top_n(subcategory, revenue, 5, {"region":"Asia Pacific"})
-    + kpi.mom_change(revenue, 2024)  [or yoy_growth]
 
 "Full performance overview"
   → kpi.yoy_growth + kpi.profit_margins + cube.pivot
@@ -307,7 +400,7 @@ Examples:
 """.strip()
 
 
-# ── Classification tool ──────────────────────────────────────────────────────
+# ── Classification tool ───────────────────────────────────────────────────────
 
 _PLAN_TOOL = {
     "name": "create_execution_plan",
@@ -367,38 +460,27 @@ _PLAN_TOOL = {
 
 
 def _extract_rows(result: dict) -> list[dict]:
-    """Pull data rows from any agent result dict."""
     return result.get("rows") or result.get("all_rows") or []
 
 
 def _rows_preview(rows: list[dict], limit: int = 12) -> str:
-    """JSON preview of rows for LLM prompts."""
     return json.dumps(rows[:limit], default=str)
 
 
 def _last_user_topic(history: list[dict]) -> str:
-    """Extract the topic from the most recent user message in history."""
     for msg in reversed(history):
         if msg["role"] == "user":
             return msg["content"]
     return ""
 
 
-# ── Planner ──────────────────────────────────────────────────────────────────
+# ── Planner ───────────────────────────────────────────────────────────────────
 
 
 class Planner:
-    """
-    Master orchestrator.  One instance per session; conversation_history
-    persists across multiple run() / chat() calls.
-    """
-
-    # How many past messages to include as context for follow-up classification
-    _HISTORY_WINDOW = 6  # 3 turns (user + assistant per turn)
+    _HISTORY_WINDOW = 6
 
     def __init__(self, api_key: str | None = None, db_path: str | None = None) -> None:
-        # Load API key from .env (api_key param accepted for compatibility but ignored —
-        # always read from environment so the key is never stored in plain args)
         load_dotenv(_ROOT / ".env")
         resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not resolved_key:
@@ -409,11 +491,9 @@ class Planner:
 
         self.client = anthropic.Anthropic(api_key=resolved_key)
 
-        # Connect to DuckDB
         resolved_db = db_path or str(_ROOT / "olap.duckdb")
         self.con = duckdb.connect(resolved_db, read_only=True)
 
-        # Initialise all agents with the shared client and connection
         self.navigator = DimensionNavigatorAgent(self.client, self.con)
         self.cube = CubeOperationsAgent(self.client, self.con)
         self.kpi = KPICalculatorAgent(self.client, self.con)
@@ -422,49 +502,37 @@ class Planner:
         self.visualization = VisualizationAgent(self.client, self.con)
         self.exec_summary = ExecutiveSummaryAgent(self.client, self.con)
 
-        # Conversation history: list of {"role": "user"|"assistant", "content": str}
         self.conversation_history: list[dict] = []
 
     # ── public interface ──────────────────────────────────────────────────────
 
     def run(self, user_query: str) -> dict:
-        import sys
-
         with open("debug.log", "a") as f:
             f.write(f"DEBUG RUN CALLED: {user_query}\n")
-        """
-        Process *user_query*, route to the correct agent(s), chain if needed,
-        and return a structured response dict.
 
-        Every response includes: status, response_mode, finding,
-        follow_up_questions, plus mode-specific fields.
-        """
-        # 1. Record the new user turn
         self.conversation_history.append({"role": "user", "content": user_query})
 
-        # 2. Classify intent → execution plan
         try:
             steps, reasoning = self._classify(user_query)
             with open("debug.log", "a") as f:
-                import json
-
                 f.write(f"PLAN: {json.dumps(steps, indent=2)}\n")
             response_mode = _detect_response_mode(user_query, steps)
         except Exception as exc:
-            error = {
-                "status": "error",
-                "message": f"Classification failed: {exc}",
-            }
+            error = {"status": "error", "message": f"Classification failed: {exc}"}
             self.conversation_history.append(
                 {"role": "assistant", "content": str(error)}
             )
             return error
 
-        # 3. Execute each step, attach title for report section headings
         agent_results: list[dict] = []
         for step in steps:
-            # Inject OLAP data from the immediately preceding result into
-            # visualization steps so the agent doesn't have to query the DB.
+            # Normalise params before dispatch (fixes Q-string → int, etc.)
+            step["params"] = _normalize_params(
+                step.get("agent", ""),
+                step.get("method", ""),
+                step.get("params") or {},
+            )
+
             if step.get("agent") == "visualization" and agent_results:
                 prev = agent_results[-1]
                 data = prev.get("rows") or prev.get("all_rows") or []
@@ -472,7 +540,6 @@ class Planner:
                 query = params.setdefault("query", {})
                 query["data"] = data
 
-            # Inject ALL preceding results into executive_summary.
             if step.get("agent") == "executive_summary" and agent_results:
                 raw = step.get("params") or {}
                 inner = raw.get("query") if isinstance(raw.get("query"), dict) else raw
@@ -485,13 +552,11 @@ class Planner:
             result["title"] = step.get("title", "")
             agent_results.append(result)
 
-        # 4. Collect all data rows across results
         all_rows: list[dict] = []
         for ar in agent_results:
             all_rows.extend(_extract_rows(ar))
 
-        # 5. Build mode-specific response
-        is_follow_up = len(self.conversation_history) > 2  # more than just this turn
+        is_follow_up = len(self.conversation_history) > 2
         prev_topic = (
             _last_user_topic(self.conversation_history[:-1]) if is_follow_up else ""
         )
@@ -507,16 +572,12 @@ class Planner:
             prev_topic,
         )
 
-        # 6. Store finding (not full report) in conversation history
         finding = response.get("finding", "")
         self.conversation_history.append({"role": "assistant", "content": finding})
 
         return response
 
     def chat(self, user_query: str) -> None:
-        """
-        Interactive helper: calls run() and prints the finding to stdout.
-        """
         result = self.run(user_query)
         text = result.get("finding") or result.get("message") or repr(result)
         sys.stdout.buffer.write((text + "\n").encode("utf-8"))
@@ -525,17 +586,9 @@ class Planner:
     # ── classification ────────────────────────────────────────────────────────
 
     def _classify(self, user_query: str) -> tuple[list[dict], str]:
-        """
-        Send the query (with recent history for context) to Claude and extract
-        the execution plan returned by the create_execution_plan tool.
-
-        Returns (steps, reasoning).
-        """
-        # Build message list: recent history + current query already appended
         window = self.conversation_history[-self._HISTORY_WINDOW :]
         messages = window if window else [{"role": "user", "content": user_query}]
 
-        # Add follow-up context to system prompt if we have prior turns
         system = _SYSTEM_PROMPT
         prior_user_msgs = [
             m for m in self.conversation_history[:-1] if m["role"] == "user"
@@ -560,23 +613,17 @@ class Planner:
         )
 
         tool_use = next(
-            (block for block in response.content if block.type == "tool_use"),
-            None,
+            (block for block in response.content if block.type == "tool_use"), None
         )
         if tool_use is None:
             raise RuntimeError("Claude did not return a tool call.")
 
         plan = tool_use.input
-        steps = plan.get("steps", [])
-        reasoning = plan.get("reasoning", "")
-        return steps, reasoning
+        return plan.get("steps", []), plan.get("reasoning", "")
 
     # ── dispatch ──────────────────────────────────────────────────────────────
 
     def _dispatch(self, step: dict) -> dict:
-        """
-        Resolve a single plan step to the right agent method and call it.
-        """
         agent_name = step.get("agent", "")
         method_name = step.get("method", "")
         params = step.get("params") or {}
@@ -592,10 +639,7 @@ class Planner:
 
         agent = agent_map.get(agent_name)
         if agent is None:
-            return {
-                "status": "error",
-                "message": f"Unknown agent '{agent_name}'.",
-            }
+            return {"status": "error", "message": f"Unknown agent '{agent_name}'."}
 
         method = getattr(agent, method_name, None)
         if method is None:
@@ -626,24 +670,15 @@ class Planner:
         is_follow_up: bool,
         prev_topic: str,
     ) -> dict:
-        """Dispatch to the correct mode-specific builder."""
-
-        # Generate common fields: finding + follow_up_questions
         if response_mode == "anomaly":
             finding = self._generate_anomaly_finding(
-                user_query,
-                agent_results,
-                is_follow_up,
-                prev_topic,
+                user_query, agent_results, is_follow_up, prev_topic
             )
         else:
             finding = self._generate_finding(
-                user_query,
-                all_rows,
-                agent_results,
-                is_follow_up,
-                prev_topic,
+                user_query, all_rows, agent_results, is_follow_up, prev_topic
             )
+
         follow_ups = self._generate_follow_up_questions(
             user_query, all_rows, response_mode
         )
@@ -670,8 +705,6 @@ class Planner:
         builder = builder_map.get(response_mode, self._build_default)
         mode_fields = builder(user_query, agent_results, steps, all_rows)
 
-        # BUG 4 fix: when multiple steps produce rows, build separate sections
-        # so the frontend renders each step's data independently (no duplicates).
         results_with_rows = [ar for ar in agent_results if _extract_rows(ar)]
         if len(results_with_rows) > 1:
             sections = []
@@ -688,51 +721,23 @@ class Planner:
             mode_fields.pop("result_rows", None)
 
         base.update(mode_fields)
-
         return base
 
-    def _build_direct(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """Direct mode: supporting_data (max 5 rows)."""
-        rows = all_rows[:5]
-        return {"supporting_data": rows}
+    def _build_direct(self, query, agent_results, steps, all_rows):
+        return {"supporting_data": all_rows[:5]}
 
-    def _build_chart(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """Chart mode: figure_json + chart_analysis."""
+    def _build_chart(self, query, agent_results, steps, all_rows):
         result: dict = {}
-
         for ar in agent_results:
             if "figure_json" in ar:
                 result["figure_json"] = ar["figure_json"]
                 result["chart_type"] = ar.get("chart_type", "")
                 break
-
-        # Generate chart analysis via sonnet
         result["chart_analysis"] = self._generate_chart_analysis(query, all_rows)
-
         return result
 
-    def _build_comparison(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """Comparison mode: result_rows + comparison_takeaway."""
+    def _build_comparison(self, query, agent_results, steps, all_rows):
         result: dict = {"result_rows": all_rows}
-
         result["comparison_takeaway"] = self._generate_short_text(
             query,
             all_rows,
@@ -740,8 +745,6 @@ class Planner:
             "Mention the biggest change or difference with specific numbers. "
             "Facts only — no recommendations. Be concise.",
         )
-
-        # Also generate the full report for the expander
         _NO_TABLE_OPS = {"visualization", "executive_summary"}
         report_inputs = [
             ar for ar in agent_results if ar.get("operation") not in _NO_TABLE_OPS
@@ -749,19 +752,10 @@ class Planner:
         report = self.reporter.full_report(report_inputs)
         result["report"] = report.get("report", "")
         result["section_count"] = report.get("section_count", 0)
-
         return result
 
-    def _build_list(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """List mode: result_rows + list_summary."""
+    def _build_list(self, query, agent_results, steps, all_rows):
         result: dict = {"result_rows": all_rows}
-
         result["list_summary"] = self._generate_short_text(
             query,
             all_rows,
@@ -769,8 +763,6 @@ class Planner:
             "Include the top item name and a specific number. "
             "Facts only — no recommendations. Be concise.",
         )
-
-        # Also generate the full report for the expander
         _NO_TABLE_OPS = {"visualization", "executive_summary"}
         report_inputs = [
             ar for ar in agent_results if ar.get("operation") not in _NO_TABLE_OPS
@@ -778,28 +770,14 @@ class Planner:
         report = self.reporter.full_report(report_inputs)
         result["report"] = report.get("report", "")
         result["section_count"] = report.get("section_count", 0)
-
         return result
 
-    def _build_summary(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """Summary mode: summary_text (short or long based on 'detailed')."""
+    def _build_summary(self, query, agent_results, steps, all_rows):
         is_detailed = "detailed" in query.lower()
         result: dict = {}
-
         result["summary_text"] = self._generate_summary_text(
-            query,
-            all_rows,
-            agent_results,
-            is_detailed,
+            query, all_rows, agent_results, is_detailed
         )
-
-        # Bubble up exec summary fields if present
         for ar in agent_results:
             if ar.get("operation") == "executive_summary":
                 result["exec_headline"] = ar.get("headline", "")
@@ -807,29 +785,18 @@ class Planner:
                 result["exec_action"] = ar.get("recommended_action", "")
                 result["exec_risks"] = ar.get("risks", [])
                 break
-
         return result
 
-    def _build_report(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """Report mode: full report text."""
+    def _build_report(self, query, agent_results, steps, all_rows):
         _NO_TABLE_OPS = {"visualization", "executive_summary"}
         report_inputs = [
             ar for ar in agent_results if ar.get("operation") not in _NO_TABLE_OPS
         ]
         report = self.reporter.full_report(report_inputs)
-
         result: dict = {
             "report": report.get("report", ""),
             "section_count": report.get("section_count", 0),
         }
-
-        # Bubble up special sections
         for ar in agent_results:
             if "figure_json" in ar and "figure_json" not in result:
                 result["figure_json"] = ar["figure_json"]
@@ -846,19 +813,10 @@ class Planner:
                 result["exec_insights"] = ar.get("insights", [])
                 result["exec_action"] = ar.get("recommended_action", "")
                 result["exec_risks"] = ar.get("risks", [])
-
         return result
 
-    def _build_anomaly(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """Anomaly mode: anomalies + interpretation."""
+    def _build_anomaly(self, query, agent_results, steps, all_rows):
         result: dict = {}
-
         for ar in agent_results:
             if ar.get("anomaly_count", 0) > 0:
                 result["anomalies"] = ar["anomalies"]
@@ -869,30 +827,19 @@ class Planner:
             result["anomalies"] = []
             result["anomaly_count"] = 0
             result["interpretation"] = "No anomalies were detected."
-
         return result
 
-    def _build_default(
-        self,
-        query: str,
-        agent_results: list[dict],
-        steps: list[dict],
-        all_rows: list[dict],
-    ) -> dict:
-        """Default mode: result_rows or report."""
+    def _build_default(self, query, agent_results, steps, all_rows):
         _NO_TABLE_OPS = {"visualization", "executive_summary"}
         report_inputs = [
             ar for ar in agent_results if ar.get("operation") not in _NO_TABLE_OPS
         ]
         report = self.reporter.full_report(report_inputs)
-
         result: dict = {
             "result_rows": all_rows,
             "report": report.get("report", ""),
             "section_count": report.get("section_count", 0),
         }
-
-        # Bubble up special sections
         for ar in agent_results:
             if "figure_json" in ar and "figure_json" not in result:
                 result["figure_json"] = ar["figure_json"]
@@ -909,62 +856,30 @@ class Planner:
                 result["exec_insights"] = ar.get("insights", [])
                 result["exec_action"] = ar.get("recommended_action", "")
                 result["exec_risks"] = ar.get("risks", [])
-
         return result
 
     # ── LLM text generators ──────────────────────────────────────────────────
 
-    def _generate_finding(
-        self,
-        query: str,
-        rows: list[dict],
-        agent_results: list[dict],
-        is_follow_up: bool,
-        prev_topic: str,
-    ) -> str:
-        """
-        Generate a 1-2 sentence finding using Haiku.
-
-        Friendly-professional tone, cites key numbers.
-        If follow-up, starts with something similar to "Based on your previous question about [topic]..."
-        Never suggests actions or recommendations.
-        Never starts with "I" or "The data shows".
-        """
+    def _generate_finding(self, query, rows, agent_results, is_follow_up, prev_topic):
         if not rows and not agent_results:
             return ""
-
-        # Gather context from agent messages
         agent_messages = [
             ar.get("message", "") for ar in agent_results if ar.get("message")
         ]
-
         preview = _rows_preview(rows, 10) if rows else "[]"
         context_str = " | ".join(agent_messages[:3]) if agent_messages else ""
-
         follow_up_instruction = ""
         if is_follow_up and prev_topic:
-            short_topic = prev_topic[:80]
-            follow_up_instruction = (
-                f'Start with "Based on your previous question about {short_topic}..." '
-            )
-
+            follow_up_instruction = f'Start with "Based on your previous question about {prev_topic[:80]}..." '
         prompt = (
-            f"Question: {query}\n"
-            f"Agent context: {context_str}\n"
-            f"Data: {preview}\n\n"
+            f"Question: {query}\nAgent context: {context_str}\nData: {preview}\n\n"
             "Write 2-3 sentences about what the data is and shows. "
-            "Cite the top number or key insight. "
-            "Describe and analyze facts and trends only. "
+            "Cite the top number or key insight. Describe and analyze facts and trends only. "
             "Never suggest business actions, strategies, or recommendations. "
             "Never say 'you should', 'consider', 'invest', 'prioritize', 'replicate'. "
-            "Never start with 'I' or 'The data shows'. "
-            f"{follow_up_instruction}"
-            "Tone: friendly and professional, like a smart analyst briefing "
-            "a senior manager. Report findings and trends only. "
-            "Never give business recommendations or action items. "
-            "Return only the finding text, no formatting."
+            f"Never start with 'I' or 'The data shows'. {follow_up_instruction}"
+            "Tone: friendly and professional. Return only the finding text, no formatting."
         )
-
         try:
             resp = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -975,51 +890,22 @@ class Planner:
         except Exception:
             return ""
 
-    def _generate_anomaly_finding(
-        self,
-        query: str,
-        agent_results: list[dict],
-        is_follow_up: bool,
-        prev_topic: str,
-    ) -> str:
-        """
-        Generate a neutral anomaly finding using Haiku.
-
-        Describes the anomaly with specific numbers and z-scores.
-        No alarm language, no recommendations.
-        """
-        # Collect anomaly data from results
+    def _generate_anomaly_finding(self, query, agent_results, is_follow_up, prev_topic):
         anomalies: list[dict] = []
         for ar in agent_results:
             anomalies.extend(ar.get("anomalies", []))
-
         if not anomalies:
             return "No statistically significant anomalies were detected in the data."
-
         preview = _rows_preview(anomalies, 6)
-
         follow_up_instruction = ""
         if is_follow_up and prev_topic:
-            short_topic = prev_topic[:80]
-            follow_up_instruction = f'Start with "Based on your previous question about {short_topic}..." or something similar to it'
-
+            follow_up_instruction = f'Start with "Based on your previous question about {prev_topic[:80]}..."'
         prompt = (
-            f"Question: {query}\n"
-            f"Anomaly data: {preview}\n\n"
-            "Write 1-2 sentences describing the anomaly neutrally with specific numbers "
-            "and z-scores. State what the value is, the mean, and how many standard "
-            "deviations away it falls. "
+            f"Question: {query}\nAnomaly data: {preview}\n\n"
+            "Write 1-2 sentences describing the anomaly neutrally with specific numbers and z-scores. "
             "No alarm language. No recommendations. No causes. "
-            "Example tone: 'Laptops recorded a z-score of 2.79, significantly above "
-            "the subcategory mean of $394K at $1.86M in total profit.' "
-            f"{follow_up_instruction}"
-            "Tone: friendly and professional, like a smart analyst briefing "
-            "a senior manager. Report findings and trends only. "
-            "Never give business recommendations or action items. "
-            "Never start with I or The data shows. "
-            "Return only the finding text, no formatting."
+            f"{follow_up_instruction} Return only the finding text, no formatting."
         )
-
         try:
             resp = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -1030,33 +916,13 @@ class Planner:
         except Exception:
             return ""
 
-    def _generate_follow_up_questions(
-        self,
-        query: str,
-        rows: list[dict],
-        mode: str,
-    ) -> list[str]:
-        """
-        Generate 3 suggested follow-up questions using Haiku.
-
-        Short, natural language, max 10 words each. Questions only.
-        """
+    def _generate_follow_up_questions(self, query, rows, mode):
         preview = _rows_preview(rows, 6) if rows else "[]"
-
         prompt = (
-            f"User asked: {query}\n"
-            f"Response mode: {mode}\n"
-            f"Data preview: {preview}\n\n"
+            f"User asked: {query}\nResponse mode: {mode}\nData preview: {preview}\n\n"
             "Generate 3 short follow-up questions (max 10 words each). "
-            "Questions must be about exploring the data further. "
-            "No recommendations. No action items. Only analytical questions. "
-            "Tone: friendly and professional, like a smart analyst briefing "
-            "a senior manager. Report findings and trends only. "
-            "Never give business recommendations or action items. "
-            "Never start with I or The data shows. "
-            "Return as a JSON array of 3 strings, no other text."
+            "Only analytical questions. Return as a JSON array of 3 strings, no other text."
         )
-
         try:
             resp = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -1071,27 +937,16 @@ class Planner:
         except Exception:
             return []
 
-    def _generate_chart_analysis(self, query: str, rows: list[dict]) -> str:
-        """
-        Generate a full paragraph (4-6 sentences) analyzing chart data using Sonnet.
-
-        Professional analyst tone — facts and observations only.
-        """
+    def _generate_chart_analysis(self, query, rows):
         if not rows:
             return ""
-
         preview = _rows_preview(rows, 20)
-
         prompt = (
-            f"Question: {query}\n"
-            f"Chart data: {preview}\n\n"
+            f"Question: {query}\nChart data: {preview}\n\n"
             "Write a full paragraph (4-6 sentences) analyzing what this chart shows. "
             "Mention trends, highest and lowest values with specific numbers. "
-            "Professional analyst tone — facts and observations only. "
-            "No recommendations, no action items, no suggestions. "
-            "Plain prose only."
+            "Professional analyst tone — facts only. No recommendations. Plain prose only."
         )
-
         try:
             resp = self.client.messages.create(
                 model="claude-sonnet-4-6",
@@ -1102,49 +957,24 @@ class Planner:
         except Exception:
             return ""
 
-    def _generate_summary_text(
-        self,
-        query: str,
-        rows: list[dict],
-        agent_results: list[dict],
-        is_detailed: bool,
-    ) -> str:
-        """
-        Generate summary text using Sonnet.
-
-        Detailed: 6-8 sentences covering multiple metrics.
-        Concise: 3-4 sentences, top insight only.
-        """
+    def _generate_summary_text(self, query, rows, agent_results, is_detailed):
         if not rows and not agent_results:
             return ""
-
         preview = _rows_preview(rows, 20)
         agent_messages = [
             ar.get("message", "") for ar in agent_results if ar.get("message")
         ]
         context_str = " | ".join(agent_messages[:4])
-
-        if is_detailed:
-            instruction = (
-                "Write a detailed summary of 6-8 sentences covering multiple metrics "
-                "and dimensions. Include specific numbers for all key findings."
-            )
-        else:
-            instruction = (
-                "Write a concise summary of 3-4 sentences focusing on the top insight. "
-                "Include specific numbers."
-            )
-
-        prompt = (
-            f"Question: {query}\n"
-            f"Agent context: {context_str}\n"
-            f"Data: {preview}\n\n"
-            f"{instruction} "
-            "Summarize findings and trends only. "
-            "No recommendations, no action items, no strategic advice, only if asked."
-            "Plain prose only."
+        instruction = (
+            "Write a detailed summary of 6-8 sentences covering multiple metrics and dimensions. "
+            "Include specific numbers for all key findings."
+            if is_detailed
+            else "Write a concise summary of 3-4 sentences focusing on the top insight. Include specific numbers."
         )
-
+        prompt = (
+            f"Question: {query}\nAgent context: {context_str}\nData: {preview}\n\n"
+            f"{instruction} Summarize findings and trends only. Plain prose only."
+        )
         try:
             resp = self.client.messages.create(
                 model="claude-sonnet-4-6",
@@ -1155,23 +985,13 @@ class Planner:
         except Exception:
             return ""
 
-    def _generate_short_text(
-        self,
-        query: str,
-        rows: list[dict],
-        instruction: str,
-    ) -> str:
-        """
-        Generate short text (list_summary, comparison_takeaway) using Haiku.
-        """
+    def _generate_short_text(self, query, rows, instruction):
         if not rows:
             return ""
         preview = _rows_preview(rows, 12)
         tone_rule = (
-            "Tone: friendly and professional, like a smart analyst briefing "
-            "a senior manager. Report findings and trends only. "
-            "Never give business recommendations or action items. "
-            "Never start with I or The data shows."
+            "Tone: friendly and professional. Report findings and trends only. "
+            "Never give business recommendations. Never start with I or The data shows."
         )
         try:
             resp = self.client.messages.create(
@@ -1189,5 +1009,4 @@ class Planner:
             return ""
 
     def reset(self) -> None:
-        """Clear conversation history to start a fresh session."""
         self.conversation_history.clear()
