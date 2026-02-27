@@ -61,7 +61,7 @@ _FIELD_MAP: dict[str, tuple[str, str]] = {
     "customer_segment": ("c.customer_segment", "JOIN dim_customer  c ON f.customer_key  = c.customer_key"),
 }
 
-_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "month"})
+_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "month", "quarter"})
 
 # dim_date is always joined for year access in yoy/mom — stored separately
 _DATE_JOIN = "JOIN dim_date d ON f.date_key = d.date_key"
@@ -561,7 +561,26 @@ ORDER BY profit_margin_pct DESC
                 f"Valid options: {_VALID_GROWTH_METRICS}"
             )
 
+    def _normalize_quarter(self, value: Any) -> int:
+        """
+        Convert any quarter representation to an integer 1-4.
+        Handles: 4, "4", "Q4", "q4", "quarter 4"
+        """
+        s = str(value).strip().upper().lstrip("Q").strip()
+        try:
+            n = int(s)
+            if 1 <= n <= 4:
+                return n
+        except ValueError:
+            pass
+        raise ValueError(
+            f"Invalid quarter value '{value}'. "
+            "Expected 1-4, Q1-Q4, or 'quarter 1-4'."
+        )
+
     def _quote(self, field: str, value: Any) -> str:
+        if field == "quarter":
+            return str(self._normalize_quarter(value))
         if field in _NUMERIC_FIELDS:
             return str(int(value))
         return "'" + str(value).replace("'", "''") + "'"

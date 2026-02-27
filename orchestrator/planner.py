@@ -149,6 +149,8 @@ agent steps that answers the user's question.  Never reply in plain text.
 ━━━ DATA MODEL ━━━
 Dimensions / field names (use these exact strings):
   Time      : year, quarter, month, month_name
+              quarter values are integers: 1 | 2 | 3 | 4
+              (NOT "Q1"/"Q2" — always pass the integer)
   Geography : region, country
   Product   : category, subcategory
   Customer  : customer_segment

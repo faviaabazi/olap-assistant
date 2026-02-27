@@ -55,7 +55,7 @@ _FIELD_MAP: dict[str, tuple[str, str]] = {
 }
 
 # Fields whose values are integers — everything else is treated as a string
-_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "month"})
+_NUMERIC_FIELDS: frozenset[str] = frozenset({"year", "month", "quarter"})
 
 # Maps measure name → (source column for inner SELECT, aggregation function)
 _MEASURES: dict[str, tuple[str, str]] = {
@@ -378,8 +378,27 @@ ORDER BY {row_dim}
                 f"Unknown measure '{measure}'. Valid measures: {_VALID_MEASURES}"
             )
 
+    def _normalize_quarter(self, value: Any) -> int:
+        """
+        Convert any quarter representation to an integer 1-4.
+        Handles: 4, "4", "Q4", "q4", "quarter 4"
+        """
+        s = str(value).strip().upper().lstrip("Q").strip()
+        try:
+            n = int(s)
+            if 1 <= n <= 4:
+                return n
+        except ValueError:
+            pass
+        raise ValueError(
+            f"Invalid quarter value '{value}'. "
+            "Expected 1-4, Q1-Q4, or 'quarter 1-4'."
+        )
+
     def _quote(self, field: str, value: Any) -> str:
         """Return a SQL-safe literal for *value*, quoting strings."""
+        if field == "quarter":
+            return str(self._normalize_quarter(value))
         if field in _NUMERIC_FIELDS:
             return str(int(value))
         # Escape any single quotes in string values
